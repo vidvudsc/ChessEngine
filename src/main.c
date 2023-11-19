@@ -4,17 +4,21 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
-Texture2D chessPieces;
 char board[8][8];
-Vector2 positions[8][8];
 Vector2 dragOffset;
+Texture2D chessPieces;
 bool isDragging = false;
+Vector2 positions[8][8];
 int dragPieceX = -1, dragPieceY = -1;
+Vector2 enPassantCaptureSquare = {-1, -1}; 
 Vector2 lastStart = {-1, -1}, lastEnd = {-1, -1};
 
-const int screenWidth = 800;
-const int screenHeight = 800;
+int boardOffsetX, boardOffsetY;
+const int screenWidth = 1920;
+const int screenHeight = 1080;
+const int chessBoardSize = 800;
 
 const Color WHITE_SQUARE = {215, 192, 162, 255};
 const Color BLACK_SQUARE = {131, 105, 83, 255};
@@ -40,11 +44,14 @@ void DrawChessBoard() {
     Color checkColor = {255, 0, 0, 128}; // Red color for check
     bool whiteKingInCheck = IsKingInCheck(true);
     bool blackKingInCheck = IsKingInCheck(false);
-    int squareSize = screenWidth / 8;
+
+    int squareSize = chessBoardSize / 8;  // Use chessBoardSize to calculate squareSize
+
     for (int y = 0; y < 8; y++) {
         for (int x = 0; x < 8; x++) {
             Color squareColor = (x + y) % 2 == 0 ? WHITE_SQUARE : BLACK_SQUARE;
-            Rectangle rect = {x * squareSize, y * squareSize, squareSize, squareSize};
+
+            Rectangle rect = {boardOffsetX + x * squareSize, boardOffsetY + y * squareSize, squareSize, squareSize};
             DrawRectangleRec(rect, squareColor);
 
             // Highlight last move
@@ -68,7 +75,7 @@ void DrawChessBoard() {
                     int moveX = (int)moves[i].x;
                     int moveY = (int)moves[i].y;
                     if (IsValidMove(x, y, moveX, moveY)) {
-                        Rectangle moveRect = {moveX * squareSize, moveY * squareSize, squareSize, squareSize};
+                        Rectangle moveRect = {boardOffsetX + moveX * squareSize, boardOffsetY + moveY * squareSize, squareSize, squareSize};
                         Color lightBlue = {173, 216, 230, 128}; // Light blue color
                         DrawRectangleRec(moveRect, lightBlue);
                     }
@@ -80,7 +87,7 @@ void DrawChessBoard() {
 }
 
 void DrawPiece(char piece, int x, int y, bool isDragged) {
-    int squareSize = screenWidth / 8;
+    int squareSize = chessBoardSize / 8;
     Rectangle sourceRect = { 0.0f, 0.0f, 300.0f, 300.0f };
     int row = (piece >= 'a' && piece <= 'z') ? 1 : 0;
     int col;
@@ -96,7 +103,8 @@ void DrawPiece(char piece, int x, int y, bool isDragged) {
     sourceRect.x = col * 300.0f;
     sourceRect.y = row * 300.0f;
 
-    Vector2 position = { x * squareSize, y * squareSize };
+    // Adjust position to be relative to the centered chessboard
+    Vector2 position = { boardOffsetX + x * squareSize, boardOffsetY + y * squareSize };
     if (!isDragged) {
         positions[y][x] = position;
     }
@@ -249,8 +257,10 @@ Vector2 *GeneratePieceMoves(char piece, int startX, int startY, int *moveCount) 
             if (IsOpponentPiece(piece, startX + 1, startY + direction)) {
                 addMove(startX + 1, startY + direction);
             }
+            
             break;
         }
+
         case 'n': { // Knight
             int knightMoves[8][2] = {{-2, -1}, {-1, -2}, {1, -2}, {2, -1}, {2, 1}, {1, 2}, {-1, 2}, {-2, 1}};
             for (int i = 0; i < 8; i++) {
@@ -428,11 +438,12 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
 }
 
 void UpdateDragAndDrop() {
-    int squareSize = screenWidth / 8;
+    int squareSize = chessBoardSize / 8;
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         Vector2 mousePos = GetMousePosition();
-        int x = mousePos.x / squareSize;
-        int y = mousePos.y / squareSize;
+        // Adjust mouse position for board offsets
+        int x = (mousePos.x - boardOffsetX) / squareSize;
+        int y = (mousePos.y - boardOffsetY) / squareSize;
         // Add additional checks to prevent dragging opponent's pieces
         if (board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
             isDragging = true;
@@ -446,14 +457,15 @@ void UpdateDragAndDrop() {
     }
 
     if (isDragging && IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
-        isDragging = false;
         Vector2 mousePos = GetMousePosition();
-        int endX = floorf(mousePos.x / squareSize);
-        int endY = floorf(mousePos.y / squareSize);
+        // Adjust mouse position for board offsets
+        int endX = (mousePos.x - boardOffsetX) / squareSize;
+        int endY = (mousePos.y - boardOffsetY) / squareSize;
+
 
         if (IsValidMove(dragPieceX, dragPieceY, endX, endY)) {
             char draggedPiece = board[dragPieceY][dragPieceX];
-
+        
             // Check for castling conditions
             if (tolower(draggedPiece) == 'k' && abs(dragPieceX - endX) == 2) {
                 if (!isWhiteTurn && !blackKingMoved &&
@@ -521,25 +533,30 @@ Vector2 GenerateRandomMove() {
     return move;
 }
 
-int main(void) {
-    InitWindow(screenWidth, screenHeight, "Chess Engine");
+int GetRandomNumber(int min, int max) {
+    return min + rand() % (max - min + 1);
+}
 
+
+int main(void) {
+
+    InitWindow(screenWidth, screenHeight, "Chess Engine");
+    boardOffsetX = (screenWidth - chessBoardSize) / 2;
+    boardOffsetY = (screenHeight - chessBoardSize) / 2;
+    srand(time(NULL));
     Image chessImage = LoadImage("images/chess.png");
     SetWindowIcon(chessImage);
     UnloadImage(chessImage);
-
     LoadChessPieces();
     SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-
     SetTargetFPS(60);
     
-
     while (!WindowShouldClose()) {
         UpdateDragAndDrop();
 
         BeginDrawing();
 
-        ClearBackground(RAYWHITE);
+        ClearBackground(DARKGRAY);
 
         DrawChessBoard();
         DrawPieces();
@@ -550,16 +567,20 @@ int main(void) {
             Vector2 *moves = GenerateMoves(false, &totalMoveCount); // Generate moves for black pieces
             bool moveMade = false;
 
-            for (int i = 0; i < totalMoveCount; i++) {
+            if (totalMoveCount > 0) {
+                // Select a random move from the available legal moves
+                int randomMoveIndex = GetRandomNumber(0, totalMoveCount - 1);
+                Vector2 selectedMove = moves[randomMoveIndex];
+
                 int startX = -1, startY = -1;
-                // Find the piece that corresponds to the move
+                // Find the piece that corresponds to the selected move
                 for (int y = 0; y < 8; y++) {
                     for (int x = 0; x < 8; x++) {
                         if (islower(board[y][x])) {
                             int pieceMoveCount;
                             Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &pieceMoveCount);
                             for (int j = 0; j < pieceMoveCount; j++) {
-                                if (pieceMoves[j].x == moves[i].x && pieceMoves[j].y == moves[i].y) {
+                                if (pieceMoves[j].x == selectedMove.x && pieceMoves[j].y == selectedMove.y) {
                                     startX = x;
                                     startY = y;
                                     goto found;
@@ -570,13 +591,12 @@ int main(void) {
                     }
                 }
                 found:
-                if (startX != -1 && IsValidMove(startX, startY, (int)moves[i].x, (int)moves[i].y)) {
+                if (startX != -1 && IsValidMove(startX, startY, (int)selectedMove.x, (int)selectedMove.y)) {
                     // Execute the move
-                    board[(int)moves[i].y][(int)moves[i].x] = board[startY][startX];
+                    board[(int)selectedMove.y][(int)selectedMove.x] = board[startY][startX];
                     board[startY][startX] = ' ';
                     isWhiteTurn = true; // Switch turns
                     moveMade = true;
-                    break;
                 }
             }
             if (!moveMade) {
@@ -585,7 +605,6 @@ int main(void) {
 
             free(moves);
         }
-
         EndDrawing();
 
         // Check for game end conditions
