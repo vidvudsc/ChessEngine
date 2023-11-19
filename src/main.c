@@ -8,6 +8,17 @@
 #include <string.h>
 #include <time.h>
 
+ // Game mode related variables
+typedef enum {
+        MODE_NORMAL,
+        MODE_PLAY_WHITE,
+        MODE_PLAY_BLACK,
+        MODE_AI_VS_AI
+} GameMode;
+
+GameMode currentMode = MODE_NORMAL;
+
+
 char board[8][8];
 Vector2 dragOffset;
 Texture2D chessPieces;
@@ -454,9 +465,58 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
     return true; // The move is valid
 }
 
-void UpdateDragAndDrop() {
-    int squareSize = chessBoardSize / 8;
+// Initialize the random number generator with a seed
+void PerformAIMove(bool isWhite) {
+    int totalMoveCount;
+    Vector2 *moves = GenerateMoves(isWhite, &totalMoveCount);
 
+    if (totalMoveCount > 0) {
+        // Generate a random index within the range of valid moves
+        int randomIndex = rand() % totalMoveCount;
+        Vector2 selectedMove = moves[randomIndex];
+
+        // Find the piece that corresponds to the selected move
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                if ((isWhite && isupper(board[y][x])) || (!isWhite && islower(board[y][x]))) {
+                    int pieceMoveCount;
+                    Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &pieceMoveCount);
+                    for (int j = 0; j < pieceMoveCount; j++) {
+                        if (pieceMoves[j].x == selectedMove.x && pieceMoves[j].y == selectedMove.y) {
+                            if (IsValidMove(x, y, (int)selectedMove.x, (int)selectedMove.y)) {
+                                // Execute the valid move
+                                char movedPiece = board[y][x];
+                                board[y][x] = ' '; // Clear the original position
+                                board[(int)selectedMove.y][(int)selectedMove.x] = movedPiece; // Place the piece on the new position
+                                isWhiteTurn = !isWhiteTurn;
+                                free(pieceMoves);
+                                goto moveMade;
+                            }
+                        }
+                    }
+                    free(pieceMoves);
+                }
+            }
+        }
+    }
+
+    moveMade:
+    if (totalMoveCount > 0) {
+        lastEnd.x = (int)moves[0].x; // Update the last end position
+        lastEnd.y = (int)moves[0].y;
+    }
+    free(moves);
+}
+
+void UpdateDragAndDrop() {
+    // Add checks for game modes
+    if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
+        (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
+        currentMode == MODE_AI_VS_AI) {
+        PerformAIMove(isWhiteTurn);
+        return;
+    }
+    int squareSize = chessBoardSize / 8;
     // Start dragging when the mouse button is pressed
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         Vector2 mousePos = GetMousePosition();
@@ -475,7 +535,6 @@ void UpdateDragAndDrop() {
             lastStart.y = y;
         }
     }
-
     // Handle dragging movement
     if (isDragging && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         Vector2 mousePos = GetMousePosition();
@@ -546,26 +605,11 @@ void UpdateDragAndDrop() {
     }
 }
 
-// Add this function to generate a random legal move for black pieces
-Vector2 GenerateRandomMove() {
-    Vector2 move;
-    int totalMoveCount;
-    Vector2 *moves = GenerateMoves(false, &totalMoveCount); // Generate moves for black pieces
-    if (totalMoveCount > 0) {
-        int randomIndex = GetRandomValue(0, totalMoveCount - 1);
-        move = moves[randomIndex];
-    } else {
-        // Handle the case where there are no legal moves for black
-        move = (Vector2){-1, -1}; // Invalid move
-    }
-    free(moves);
-    return move;
-}
 
-int GetRandomNumber(int min, int max) {
-    return min + rand() % (max - min + 1);
-}
 
+
+bool gameOver = false;
+char* gameOverMessage = "";
 
 int main(void) {
 
@@ -579,61 +623,59 @@ int main(void) {
     LoadChessPieces();
     SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     SetTargetFPS(60);
+    srand(time(NULL));
     
-    while (!WindowShouldClose()) {
-        UpdateDragAndDrop();
 
+    // Main game loop
+    while (!WindowShouldClose()) {
+        // Update game logic
+        if (!gameOver) {
+            if (currentMode != MODE_AI_VS_AI) {
+                UpdateDragAndDrop();
+            }
+
+            // AI's turn to play in AI vs AI mode, or in single-player modes
+            if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
+                (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
+                currentMode == MODE_AI_VS_AI) {
+                PerformAIMove(isWhiteTurn);
+            }
+        }
+
+        // Drawing
         BeginDrawing();
 
         ClearBackground(DGRAY);
-
         DrawChessBoard();
         DrawPieces();
 
-        if (!isWhiteTurn) {
-            // Move generation and handling for black pieces should only happen when it's black's turn
-            int totalMoveCount;
-            Vector2 *moves = GenerateMoves(false, &totalMoveCount); // Generate moves for black pieces
-            bool moveMade = false;
-
-            if (totalMoveCount > 0) {
-                // Select a random move from the available legal moves
-                int randomMoveIndex = GetRandomNumber(0, totalMoveCount - 1);
-                Vector2 selectedMove = moves[randomMoveIndex];
-
-                int startX = -1, startY = -1;
-                // Find the piece that corresponds to the selected move
-                for (int y = 0; y < 8; y++) {
-                    for (int x = 0; x < 8; x++) {
-                        if (islower(board[y][x])) {
-                            int pieceMoveCount;
-                            Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &pieceMoveCount);
-                            for (int j = 0; j < pieceMoveCount; j++) {
-                                if (pieceMoves[j].x == selectedMove.x && pieceMoves[j].y == selectedMove.y) {
-                                    startX = x;
-                                    startY = y;
-                                    goto found;
-                                }
-                            }
-                            free(pieceMoves);
-                        }
-                    }
-                }
-                found:
-                if (startX != -1 && IsValidMove(startX, startY, (int)selectedMove.x, (int)selectedMove.y)) {
-                    // Execute the move
-                    board[(int)selectedMove.y][(int)selectedMove.x] = board[startY][startX];
-                    board[startY][startX] = ' ';
-                    isWhiteTurn = true; // Switch turns
-                    moveMade = true;
-                }
+        // Draw game mode selection buttons and reset the board if a mode is selected
+         // Draw game mode selection buttons and reset the board if a mode is selected
+        if (GuiButton((Rectangle){10, 10, 150, 30}, "Normal Mode")) {
+            if (currentMode != MODE_NORMAL) {
+                currentMode = MODE_NORMAL;
+                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
             }
-            if (!moveMade) {
-                // Handle the situation when no valid moves are available (checkmate or stalemate)
-            }
-
-            free(moves);
         }
+        if (GuiButton((Rectangle){170, 10, 150, 30}, "Play as White")) {
+            if (currentMode != MODE_PLAY_WHITE) {
+                currentMode = MODE_PLAY_WHITE;
+                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+            }
+        }
+        if (GuiButton((Rectangle){330, 10, 150, 30}, "Play as Black")) {
+            if (currentMode != MODE_PLAY_BLACK) {
+                currentMode = MODE_PLAY_BLACK;
+                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+            }
+        }
+        if (GuiButton((Rectangle){490, 10, 150, 30}, "AI vs AI")) {
+            if (currentMode != MODE_AI_VS_AI) {
+                currentMode = MODE_AI_VS_AI;
+                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+            }
+        }
+
         // Draw Restart Button
         if (GuiButton((Rectangle){10, screenHeight - 160, 100, 30}, "Restart")) {
             // Reset the game state
@@ -643,6 +685,7 @@ int main(void) {
             for (int i = 0; i < 2; i++) {
                 whiteRookMoved[i] = blackRookMoved[i] = false;
             }
+            gameOver = false;
         }
 
         // Draw Quit Button
@@ -652,23 +695,30 @@ int main(void) {
             return 0; // Exit the program
         }
 
-        EndDrawing();
+        // Check for game end conditions and display game over message
+        if (!gameOver) {
+            bool whiteKingInCheck = IsKingInCheck(true);
+            bool blackKingInCheck = IsKingInCheck(false);
 
-        // Check for game end conditions
-        bool whiteKingInCheck = IsKingInCheck(true);
-        bool blackKingInCheck = IsKingInCheck(false);
+            int totalMoveCount;
+            GenerateMoves(isWhiteTurn, &totalMoveCount);
 
-        int totalMoveCount;
-        GenerateMoves(isWhiteTurn, &totalMoveCount);
-
-        if (totalMoveCount == 0) {
-            if ((isWhiteTurn && whiteKingInCheck) || (!isWhiteTurn && blackKingInCheck)) {
-                printf("%s won by checkmate!\n", isWhiteTurn ? "Black" : "White");
-            } else {
-                printf("Stalemate!\n");
+            if (totalMoveCount == 0) {
+                gameOver = true;
+                if ((isWhiteTurn && whiteKingInCheck) || (!isWhiteTurn && blackKingInCheck)) {
+                    gameOverMessage = isWhiteTurn ? "Black wins by checkmate!" : "White wins by checkmate!";
+                } else {
+                    gameOverMessage = "Stalemate!";
+                }
             }
-            break; // Exit the loop to close the game
         }
+
+        if (gameOver) {
+            // Display game over message
+            DrawText(gameOverMessage, 10, screenHeight / 2, 20, RED);
+        }
+
+        EndDrawing();
     }
 
     CloseWindow();
