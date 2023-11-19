@@ -1,4 +1,6 @@
+#define RAYGUI_IMPLEMENTATION
 #include "raylib.h"
+#include "C:\raygui-4.0\src\raygui.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
@@ -20,6 +22,7 @@ const int screenWidth = 1920;
 const int screenHeight = 1080;
 const int chessBoardSize = 800;
 
+const Color DGRAY = {35, 38,46, 1}; 
 const Color WHITE_SQUARE = {215, 192, 162, 255};
 const Color BLACK_SQUARE = {131, 105, 83, 255};
 const Color START_POS_COLOR = {255, 214, 10, 128};  
@@ -39,13 +42,19 @@ void LoadChessPieces() {
     chessPieces = LoadTextureFromImage(image);
     UnloadImage(image);
 }
-
 void DrawChessBoard() {
     Color checkColor = {255, 0, 0, 128}; // Red color for check
     bool whiteKingInCheck = IsKingInCheck(true);
     bool blackKingInCheck = IsKingInCheck(false);
 
     int squareSize = chessBoardSize / 8;  // Use chessBoardSize to calculate squareSize
+    int borderWidth = 15; // Adjust the thickness of the border
+    Color borderColor = {82, 81, 85, 255}; // The border color
+    Color cornerColor = DARKGRAY; // Dark gray color for corners
+
+    // Draw the border with corners
+    DrawRectangle(boardOffsetX - borderWidth, boardOffsetY - borderWidth, squareSize * 8 + 2 * borderWidth, squareSize * 8 + 2 * borderWidth, borderColor);
+    DrawRectangleLinesEx((Rectangle){boardOffsetX - borderWidth, boardOffsetY - borderWidth, squareSize * 8 + 2 * borderWidth, squareSize * 8 + 2 * borderWidth}, borderWidth, borderColor);
 
     for (int y = 0; y < 8; y++) {
         for (int x = 0; x < 8; x++) {
@@ -66,24 +75,32 @@ void DrawChessBoard() {
                 (blackKingInCheck && board[y][x] == 'k')) {
                 DrawRectangleRec(rect, checkColor);
             }
-            
+
             // Highlight possible moves for the selected piece in light blue
-            if (isDragging && dragPieceX == x && dragPieceY == y) {
+            // After the loops that draw the squares
+            if (isDragging) {
                 int moveCount;
-                Vector2 *moves = GeneratePieceMoves(board[y][x], x, y, &moveCount);
+                Vector2 *moves = GeneratePieceMoves(board[dragPieceY][dragPieceX], dragPieceX, dragPieceY, &moveCount);
                 for (int i = 0; i < moveCount; i++) {
                     int moveX = (int)moves[i].x;
                     int moveY = (int)moves[i].y;
-                    if (IsValidMove(x, y, moveX, moveY)) {
+                    if (IsValidMove(dragPieceX, dragPieceY, moveX, moveY)) {
                         Rectangle moveRect = {boardOffsetX + moveX * squareSize, boardOffsetY + moveY * squareSize, squareSize, squareSize};
-                        Color lightBlue = {173, 216, 230, 128}; // Light blue color
+                        Color lightBlue = {173, 216, 230, 10};// Light blue color
                         DrawRectangleRec(moveRect, lightBlue);
                     }
                 }
                 free(moves);
             }
+
         }
     }
+
+    // Draw the fully covered corners
+    DrawRectangle(boardOffsetX - borderWidth, boardOffsetY - borderWidth, borderWidth, borderWidth, cornerColor);
+    DrawRectangle(boardOffsetX + 8 * squareSize, boardOffsetY - borderWidth, borderWidth, borderWidth, cornerColor);
+    DrawRectangle(boardOffsetX - borderWidth, boardOffsetY + 8 * squareSize, borderWidth, borderWidth, cornerColor);
+    DrawRectangle(boardOffsetX + 8 * squareSize, boardOffsetY + 8 * squareSize, borderWidth, borderWidth, cornerColor);
 }
 
 void DrawPiece(char piece, int x, int y, bool isDragged) {
@@ -439,12 +456,15 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
 
 void UpdateDragAndDrop() {
     int squareSize = chessBoardSize / 8;
+
+    // Start dragging when the mouse button is pressed
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         Vector2 mousePos = GetMousePosition();
         // Adjust mouse position for board offsets
         int x = (mousePos.x - boardOffsetX) / squareSize;
         int y = (mousePos.y - boardOffsetY) / squareSize;
-        // Add additional checks to prevent dragging opponent's pieces
+
+        // Check if a piece is at the clicked position and if it's the correct turn
         if (board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
             isDragging = true;
             dragPieceX = x;
@@ -456,13 +476,22 @@ void UpdateDragAndDrop() {
         }
     }
 
+    // Handle dragging movement
+    if (isDragging && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        Vector2 mousePos = GetMousePosition();
+        // Update the dragged piece's position to follow the mouse cursor
+        positions[dragPieceY][dragPieceX] = (Vector2){ mousePos.x - dragOffset.x, mousePos.y - dragOffset.y };
+    }
+
+    // Execute the move when the mouse button is released
     if (isDragging && IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+        isDragging = false; // Stop dragging
         Vector2 mousePos = GetMousePosition();
         // Adjust mouse position for board offsets
         int endX = (mousePos.x - boardOffsetX) / squareSize;
         int endY = (mousePos.y - boardOffsetY) / squareSize;
 
-
+        // Check for castling conditions and normal moves
         if (IsValidMove(dragPieceX, dragPieceY, endX, endY)) {
             char draggedPiece = board[dragPieceY][dragPieceX];
         
@@ -556,7 +585,7 @@ int main(void) {
 
         BeginDrawing();
 
-        ClearBackground(DARKGRAY);
+        ClearBackground(DGRAY);
 
         DrawChessBoard();
         DrawPieces();
@@ -605,6 +634,24 @@ int main(void) {
 
             free(moves);
         }
+        // Draw Restart Button
+        if (GuiButton((Rectangle){10, screenHeight - 160, 100, 30}, "Restart")) {
+            // Reset the game state
+            SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+            isWhiteTurn = true;
+            whiteKingMoved = blackKingMoved = false;
+            for (int i = 0; i < 2; i++) {
+                whiteRookMoved[i] = blackRookMoved[i] = false;
+            }
+        }
+
+        // Draw Quit Button
+        if (GuiButton((Rectangle){10, screenHeight - 100, 100, 30}, "Quit")) {
+            // Close the game window
+            CloseWindow();
+            return 0; // Exit the program
+        }
+
         EndDrawing();
 
         // Check for game end conditions
@@ -624,7 +671,6 @@ int main(void) {
         }
     }
 
-    UnloadTexture(chessPieces);
     CloseWindow();
 
     return 0;
