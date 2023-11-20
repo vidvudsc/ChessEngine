@@ -268,12 +268,9 @@ Vector2 *GeneratePieceMoves(char piece, int startX, int startY, int *moveCount) 
             y += dy;
         }
     }
-
-
-    // Check for each piece type
     switch (tolower(piece)) {
         case 'p': { // Pawn
-            int direction = isupper(piece) ? -1 : 1;
+            int direction = isupper(piece) ? -1 : 1;  // Define direction once for the pawn
             // Forward move
             if (board[startY + direction][startX] == ' ') {
                 addMove(startX, startY + direction);
@@ -294,14 +291,14 @@ Vector2 *GeneratePieceMoves(char piece, int startX, int startY, int *moveCount) 
 
             // En passant capture
             if (startY == (isupper(piece) ? 3 : 4)) {
-                if (enPassantCaptureSquare.x == startX - 1 && enPassantCaptureSquare.y == startY) {
+                if (enPassantCaptureSquare.x == startX - 1 && enPassantCaptureSquare.y == startY + direction) {
                     addMove(startX - 1, startY + direction);
                 }
-                if (enPassantCaptureSquare.x == startX + 1 && enPassantCaptureSquare.y == startY) {
+                if (enPassantCaptureSquare.x == startX + 1 && enPassantCaptureSquare.y == startY + direction) {
                     addMove(startX + 1, startY + direction);
                 }
             }
-                
+        
             break;
         }
 
@@ -499,20 +496,31 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
     }
 
     return true; // The move is valid
-    // Add this after checking for basic movement rules
-    if (tolower(tempStart) == 'p' && endX == enPassantCaptureSquare.x && endY == enPassantCaptureSquare.y) {
-        int capturedPawnY = isupper(tempStart) ? 3 : 4; // The rank where the captured pawn is located
-        // Temporarily remove the captured pawn
-        char capturedPawn = board[capturedPawnY][endX];
-        board[capturedPawnY][endX] = ' ';
+  
 
-        bool isPlayerKingInCheck = IsKingInCheck(isWhiteMove);
+    
+   // En passant validation
+    if (tolower(board[startY][startX]) == 'p' && endX == enPassantCaptureSquare.x && endY == enPassantCaptureSquare.y) {
+        int pawnDirection = isupper(board[startY][startX]) ? -1 : 1;
+        int captureRow = startY;
+        char capturedPawn = board[captureRow][endX];
+        board[captureRow][endX] = ' '; // Temporarily remove the captured pawn
 
-        // Put back the captured pawn
-        board[capturedPawnY][endX] = capturedPawn;
+        // Make the temporary en passant move
+        board[startY][startX] = ' ';
+        board[endY][endX] = board[captureRow][endX];
 
-        if (isPlayerKingInCheck) return false;
+        bool isPlayerKingInCheck = IsKingInCheck(isupper(board[startY][startX]));
+
+        // Revert the board back to original
+        board[startY][startX] = isupper(board[startY][startX]) ? 'P' : 'p';
+        board[endY][endX] = ' ';
+        board[captureRow][endX] = capturedPawn;
+
+        if (isPlayerKingInCheck) return false; // King would be in check after en passant, so the move is not valid
     }
+    
+
 
 }
 
@@ -558,21 +566,21 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
         halfMoveClock++;
     }
 
-    if (tolower(piece) == 'p' && abs(startY - endY) == 2) {
-        enPassantCaptureSquare = (Vector2){endX, (startY + endY) / 2};
+    // Perform en passant capture
+    if (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1) {
+        int captureRow = isupper(piece) ? 3 : 4; // Opponent's pawn row
+        board[captureRow][endX] = ' ';
+    }
+    // Set or reset en passant capture square for pawn moves
+    if (tolower(piece) == 'p' && abs(startY - endY) == 2) { // Two-square move
+        enPassantCaptureSquare = (Vector2){endX, startY + (isupper(piece) ? -1 : 1)};
     } else {
-        enPassantCaptureSquare = (Vector2){-1, -1}; // Reset if not a two-square pawn move
+        enPassantCaptureSquare = (Vector2){-1, -1};
     }
 
-    if (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && endY == enPassantCaptureSquare.y) {
-        // Remove the captured pawn
-        int capturedPawnY = isupper(piece) ? 3 : 4; // The rank where the captured pawn is located
-        board[capturedPawnY][endX] = ' ';
-    }
-
-    // Perform the actual move
-    board[endY][endX] = piece;
+    // Execute the move
     board[startY][startX] = ' ';
+    board[endY][endX] = piece;
     
     // Update the game state (turn, castling rights, etc.)
     isWhiteTurn = !isWhiteTurn;
@@ -679,10 +687,8 @@ void HandlePieceDragging() {
     }
 }
 
-void UpdateDragAndDrop() {
+void Mode() {
     HandlePieceDragging();
-
-    // Add any additional logic that was previously in UpdateDragAndDrop but is not part of the dragging process
     // For example, handling AI moves if it's the AI's turn
     if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
         (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
@@ -707,6 +713,7 @@ int main(void) {
     CheckKingsCount();
     SetTargetFPS(60);
     srand(time(NULL));
+    ToggleFullscreen();
     
 
     // Main game loop
@@ -813,7 +820,16 @@ int main(void) {
 
         if (gameOver) {
             // Display game over message
-            DrawText(gameOverMessage, 10, screenHeight / 2, 20, RED);
+
+            int textWidth = MeasureText(gameOverMessage, 20);
+            int textHeight = 20; // Assuming a font size of 20
+
+            // Calculate the position for the bottom right corner
+            int posX = GetScreenWidth() - textWidth - 10; // 10 pixels from the right edge
+            int posY = GetScreenHeight() - textHeight - 10; // 10 pixels from the bottom edge
+
+            // Draw the text at the calculated position
+            DrawText(gameOverMessage, posX, posY, 20, RED);
         }
 
         EndDrawing();
