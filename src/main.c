@@ -8,6 +8,27 @@
 #include <string.h>
 #include <time.h>
 
+
+typedef struct {
+    char piece;
+    int startX, startY;
+    int endX, endY;
+} Move;
+
+Move *moveHistory = NULL;
+int moveCount = 0;
+
+void LogMove(char piece, int startX, int startY, int endX, int endY) {
+    moveHistory = realloc(moveHistory, (moveCount + 1) * sizeof(Move));
+    moveHistory[moveCount].piece = piece;
+    moveHistory[moveCount].startX = startX;
+    moveHistory[moveCount].startY = startY;
+    moveHistory[moveCount].endX = endX;
+    moveHistory[moveCount].endY = endY;
+    moveCount++;
+}
+
+
  // Game mode related variables
 typedef enum {
         MODE_NORMAL,
@@ -384,6 +405,32 @@ Vector2 *GenerateMoves(bool isWhite, int *totalMoveCount) {
     return allMoves;
 }
 
+void CheckKingsCount() {
+    int whiteKings = 0, blackKings = 0;
+
+    // Count the number of white and black kings on the board
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            if (board[y][x] == 'K') {
+                whiteKings++;
+            } else if (board[y][x] == 'k') {
+                blackKings++;
+            }
+        }
+    }
+
+   if (whiteKings > 1 || blackKings > 1) {
+        printf("Error: Invalid king count detected!\n");
+        for (int i = 0; i < moveCount; i++) {
+            printf("Move %d: %c from (%d, %d) to (%d, %d)\n", 
+                   i + 1, 
+                   moveHistory[i].piece, 
+                   moveHistory[i].startX, moveHistory[i].startY, 
+                   moveHistory[i].endX, moveHistory[i].endY);
+        }
+    }
+}
+
 bool IsValidMove(int startX, int startY, int endX, int endY) {
     // Validate the basic movement rules
     int moveCount;
@@ -470,22 +517,23 @@ void PerformAIMove(bool isWhite) {
     int totalMoveCount;
     Vector2 *moves = GenerateMoves(isWhite, &totalMoveCount);
 
-    if (totalMoveCount > 0) {
-        // Generate a random index within the range of valid moves
-        int randomIndex = rand() % totalMoveCount;
-        Vector2 selectedMove = moves[randomIndex];
+    char movedPiece = ' '; // Declare movedPiece here
+    int x = -1, y = -1; // Declare x and y here
+    Vector2 selectedMove = { -1, -1 }; // Declare selectedMove here
 
-        // Find the piece that corresponds to the selected move
-        for (int y = 0; y < 8; y++) {
-            for (int x = 0; x < 8; x++) {
+    if (totalMoveCount > 0) {
+        int randomIndex = rand() % totalMoveCount;
+        selectedMove = moves[randomIndex]; // Assign value to selectedMove here
+
+        for (y = 0; y < 8; y++) {
+            for (x = 0; x < 8; x++) {
                 if ((isWhite && isupper(board[y][x])) || (!isWhite && islower(board[y][x]))) {
                     int pieceMoveCount;
                     Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &pieceMoveCount);
                     for (int j = 0; j < pieceMoveCount; j++) {
                         if (pieceMoves[j].x == selectedMove.x && pieceMoves[j].y == selectedMove.y) {
                             if (IsValidMove(x, y, (int)selectedMove.x, (int)selectedMove.y)) {
-                                // Execute the valid move
-                                char movedPiece = board[y][x];
+                                movedPiece = board[y][x]; // Set movedPiece here
                                 board[y][x] = ' '; // Clear the original position
                                 board[(int)selectedMove.y][(int)selectedMove.x] = movedPiece; // Place the piece on the new position
                                 isWhiteTurn = !isWhiteTurn;
@@ -501,12 +549,17 @@ void PerformAIMove(bool isWhite) {
     }
 
     moveMade:
+    
     if (totalMoveCount > 0) {
-        lastEnd.x = (int)moves[0].x; // Update the last end position
-        lastEnd.y = (int)moves[0].y;
+        LogMove(movedPiece, x, y, (int)selectedMove.x, (int)selectedMove.y); // Log the move
+        lastEnd.x = (int)selectedMove.x; // Update the last end position
+        lastEnd.y = (int)selectedMove.y;
     }
     free(moves);
+    CheckKingsCount();
 }
+
+
 
 void UpdateDragAndDrop() {
     // Add checks for game modes
@@ -593,6 +646,7 @@ void UpdateDragAndDrop() {
                     else blackKingMoved = true;
                 }
             }
+            LogMove(draggedPiece, dragPieceX, dragPieceY, endX, endY);
 
             board[dragPieceY][dragPieceX] = ' ';
             lastEnd.x = endX;
@@ -622,6 +676,7 @@ int main(void) {
     UnloadImage(chessImage);
     LoadChessPieces();
     SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    CheckKingsCount();
     SetTargetFPS(60);
     srand(time(NULL));
     
