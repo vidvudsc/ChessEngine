@@ -696,13 +696,14 @@ char* gameOverMessage = "";
 
 int main(void) {
     InitWindow(screenWidth, screenHeight, "Chess Engine");
+    char fenString[] = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     boardOffsetX = (screenWidth - chessBoardSize) / 2;
     boardOffsetY = (screenHeight - chessBoardSize) / 2;
     Image chessImage = LoadImage("images/chess.png");
     SetWindowIcon(chessImage);
     UnloadImage(chessImage);
     LoadChessPieces();
-    SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    SetupBoardFromFEN(fenString);
     CheckKingsCount();
     SetTargetFPS(60);
     srand(time(NULL));
@@ -729,36 +730,48 @@ int main(void) {
         DrawChessBoard();
         DrawPieces();
 
-         // Draw game mode selection buttons and reset the board if a mode is selected
-        if (GuiButton((Rectangle){10, 10, 150, 30}, "Normal Mode")) {
+        
+
+
+        int buttonHeight = 50;
+        int buttonWidth = 150; // Set the button width to the desired value.
+        int startY = screenHeight / 2 - (buttonHeight * 2 + 10); // Adjust as needed for spacing.
+
+        // Normal Mode button
+        if (GuiButton((Rectangle){10, startY, buttonWidth, buttonHeight}, "Normal Mode")) {
             if (currentMode != MODE_NORMAL) {
                 currentMode = MODE_NORMAL;
-                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-            }
-        }
-        if (GuiButton((Rectangle){170, 10, 150, 30}, "Play as White")) {
-            if (currentMode != MODE_PLAY_WHITE) {
-                currentMode = MODE_PLAY_WHITE;
-                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-            }
-        }
-        if (GuiButton((Rectangle){330, 10, 150, 30}, "Play as Black")) {
-            if (currentMode != MODE_PLAY_BLACK) {
-                currentMode = MODE_PLAY_BLACK;
-                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-            }
-        }
-        if (GuiButton((Rectangle){490, 10, 150, 30}, "AI vs AI")) {
-            if (currentMode != MODE_AI_VS_AI) {
-                currentMode = MODE_AI_VS_AI;
-                SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+                SetupBoardFromFEN(fenString);
             }
         }
 
-        // Draw Restart Button
-        if (GuiButton((Rectangle){10, screenHeight - 160, 100, 30}, "Restart")) {
-            // Reset the game state
-            SetupBoardFromFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        // Play as White button
+        if (GuiButton((Rectangle){10, startY + buttonHeight + 10, buttonWidth, buttonHeight}, "Play as White")) {
+            if (currentMode != MODE_PLAY_WHITE) {
+                currentMode = MODE_PLAY_WHITE;
+                SetupBoardFromFEN(fenString);
+            }
+        }
+
+        // Play as Black button
+        if (GuiButton((Rectangle){10, startY + 2 * (buttonHeight + 10), buttonWidth, buttonHeight}, "Play as Black")) {
+            if (currentMode != MODE_PLAY_BLACK) {
+                currentMode = MODE_PLAY_BLACK;
+                SetupBoardFromFEN(fenString);
+            }
+        }
+
+        // AI vs AI button
+        if (GuiButton((Rectangle){10, startY + 3 * (buttonHeight + 10), buttonWidth, buttonHeight}, "AI vs AI")) {
+            if (currentMode != MODE_AI_VS_AI) {
+                currentMode = MODE_AI_VS_AI;
+                SetupBoardFromFEN(fenString);
+            }
+        }
+
+        // Restart button
+        if (GuiButton((Rectangle){10, screenHeight - 160, buttonWidth, buttonHeight}, "Restart")) {
+            SetupBoardFromFEN(fenString);
             halfMoveClock = 0;
             isWhiteTurn = true;
             whiteKingMoved = blackKingMoved = false;
@@ -768,12 +781,12 @@ int main(void) {
             gameOver = false;
         }
 
-        // Draw Quit Button
-        if (GuiButton((Rectangle){10, screenHeight - 100, 100, 30}, "Quit")) {
-            // Close the game window
+        // Quit button
+        if (GuiButton((Rectangle){10, screenHeight - 100, buttonWidth, buttonHeight}, "Quit")) {
             CloseWindow();
-            return 0; // Exit the program
+            return 0;
         }
+
 
         if (!gameOver) {
             bool whiteKingInCheck = IsKingInCheck(true);
