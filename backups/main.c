@@ -291,17 +291,7 @@ Vector2 *GeneratePieceMoves(char piece, int startX, int startY, int *moveCount) 
             if (IsOpponentPiece(piece, startX + 1, startY + direction)) {
                 addMove(startX + 1, startY + direction);
             }
-
-            // En passant capture
-            if (startY == (isupper(piece) ? 3 : 4)) {
-                if (enPassantCaptureSquare.x == startX - 1 && enPassantCaptureSquare.y == startY) {
-                    addMove(startX - 1, startY + direction);
-                }
-                if (enPassantCaptureSquare.x == startX + 1 && enPassantCaptureSquare.y == startY) {
-                    addMove(startX + 1, startY + direction);
-                }
-            }
-                
+            
             break;
         }
 
@@ -499,21 +489,6 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
     }
 
     return true; // The move is valid
-    // Add this after checking for basic movement rules
-    if (tolower(tempStart) == 'p' && endX == enPassantCaptureSquare.x && endY == enPassantCaptureSquare.y) {
-        int capturedPawnY = isupper(tempStart) ? 3 : 4; // The rank where the captured pawn is located
-        // Temporarily remove the captured pawn
-        char capturedPawn = board[capturedPawnY][endX];
-        board[capturedPawnY][endX] = ' ';
-
-        bool isPlayerKingInCheck = IsKingInCheck(isWhiteMove);
-
-        // Put back the captured pawn
-        board[capturedPawnY][endX] = capturedPawn;
-
-        if (isPlayerKingInCheck) return false;
-    }
-
 }
 
 void PerformAIMove(bool isWhite) {
@@ -557,19 +532,6 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
     } else {
         halfMoveClock++;
     }
-
-    if (tolower(piece) == 'p' && abs(startY - endY) == 2) {
-        enPassantCaptureSquare = (Vector2){endX, (startY + endY) / 2};
-    } else {
-        enPassantCaptureSquare = (Vector2){-1, -1}; // Reset if not a two-square pawn move
-    }
-
-    if (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && endY == enPassantCaptureSquare.y) {
-        // Remove the captured pawn
-        int capturedPawnY = isupper(piece) ? 3 : 4; // The rank where the captured pawn is located
-        board[capturedPawnY][endX] = ' ';
-    }
-
     // Perform the actual move
     board[endY][endX] = piece;
     board[startY][startX] = ' ';
