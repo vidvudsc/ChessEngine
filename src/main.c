@@ -565,7 +565,6 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
     } else {
         halfMoveClock++;
     }
-
     // Perform en passant capture
     if (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1) {
         int captureRow = isupper(piece) ? 3 : 4; // Opponent's pawn row
@@ -807,7 +806,7 @@ int main(void) {
                 if ((isWhiteTurn && whiteKingInCheck) || (!isWhiteTurn && blackKingInCheck)) {
                     gameOverMessage = isWhiteTurn ? "Black wins by checkmate!" : "White wins by checkmate!";
                 } else {
-                    gameOverMessage = "Stalemate!";
+                    gameOverMessage = "Stalemate!"; // Stalemate condition
                 }
             } else if (IsFiftyMoveRule() || IsSeventyFiveMoveRule()) {
                 gameOver = true;
@@ -817,6 +816,7 @@ int main(void) {
                 gameOverMessage = "Draw by insufficient material!";
             }
         }
+
 
         if (gameOver) {
             // Display game over message
