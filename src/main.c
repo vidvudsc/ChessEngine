@@ -577,6 +577,14 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
         enPassantCaptureSquare = (Vector2){-1, -1};
     }
 
+    // Pawn promotion logic
+    if (tolower(piece) == 'p') {
+        if ((isupper(piece) && endY == 0) || (!isupper(piece) && endY == 7)) {
+            // Promote pawn to queen
+            piece = isupper(piece) ? 'Q' : 'q';
+        }
+    }
+
     // Execute the move
     board[startY][startX] = ' ';
     board[endY][endX] = piece;
@@ -839,3 +847,4 @@ int main(void) {
 
     return 0;
 }
+
