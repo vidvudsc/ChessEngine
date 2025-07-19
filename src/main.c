@@ -8,6 +8,10 @@
 #include <string.h>
 #include <time.h>
 
+// --- Add global Sound variables ---
+Sound moveSound; // For normal moves
+Sound captureSound; // For captures
+
  // Game mode related variables
 typedef enum {
         MODE_NORMAL,
@@ -641,6 +645,14 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char pr
     if (!suppressPrintMove) {
         PrintMove(startX, startY, endX, endY, piece, promotionPiece);
     }
+    // --- Play move/capture sound ---
+    bool isCapture = (board[endY][endX] != ' ');
+    bool isEnPassant = (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1);
+    if (isCapture || isEnPassant) {
+        PlaySound(captureSound);
+    } else {
+        PlaySound(moveSound);
+    }
     // Check if the move is a pawn move or a capture
     if (tolower(piece) == 'p' || board[endY][endX] != ' ') {
         halfMoveClock = 0;
@@ -981,6 +993,9 @@ void PrintGameMode(void) {
 
 int main(void) {
     InitWindow(screenWidth, screenHeight, "Chess Engine");
+    InitAudioDevice(); // Initialize audio device
+    moveSound = LoadSound("sounds/move.wav");
+    captureSound = LoadSound("sounds/capture.wav");
     char fenString[] = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     float boardScale = 0.8f;
     chessBoardSize = (int)((screenWidth < screenHeight ? screenWidth : screenHeight) * boardScale);
@@ -1133,7 +1148,6 @@ int main(void) {
 
             int textWidth = MeasureText(gameOverMessage, 20);
             int textHeight = 20; // Assuming a font size of 20
-
             // Calculate the position for the bottom right corner
             int posX = GetScreenWidth() - textWidth - 10; // 10 pixels from the right edge
             int posY = GetScreenHeight() - textHeight - 10; // 10 pixels from the bottom edge
@@ -1144,7 +1158,9 @@ int main(void) {
 
         EndDrawing();
     }
-
+    UnloadSound(moveSound);
+    UnloadSound(captureSound);
+    CloseAudioDevice();
     CloseWindow();
 
     return 0;
