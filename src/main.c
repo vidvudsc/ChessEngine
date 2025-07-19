@@ -26,13 +26,18 @@ Vector2 positions[8][8];
 int dragPieceX = -1, dragPieceY = -1;
 Vector2 enPassantCaptureSquare = {-1, -1}; 
 Vector2 lastStart = {-1, -1}, lastEnd = {-1, -1};
+int boardOffsetX = 0;
+int boardOffsetY = 0;
+const int screenWidth = 1200;
+const int screenHeight = 800;
+int chessBoardSize = 0;
 
-int boardOffsetX, boardOffsetY;
-const int screenWidth = 1920;
-const int screenHeight = 1080;
-const int chessBoardSize = 800;
+// --- Persistent selection state for move highlighting ---
+int selectedPieceX = -1, selectedPieceY = -1;
+Vector2 *selectedMoves = NULL;
+int selectedMoveCount = 0;
 
-const Color DGRAY = {35, 38,46, 1}; 
+const Color DGRAY = {35, 38, 46, 255}; 
 const Color WHITE_SQUARE = {215, 192, 162, 255};
 const Color BLACK_SQUARE = {131, 105, 83, 255};
 const Color START_POS_COLOR = {255, 214, 10, 128};  
@@ -44,15 +49,31 @@ bool isWhiteTurn = true; // White starts
 bool whiteKingMoved = false, blackKingMoved = false;
 bool whiteRookMoved[2] = {false, false}, blackRookMoved[2] = {false, false};
 
+// --- Game over state (move these above CheckKingsCount) ---
+bool gameOver = false;
+char* gameOverMessage = "";
+
 bool IsKingInCheck(bool isWhiteKing);
 bool IsOpponentPiece(char piece, int x, int y);
 bool IsValidMove(int startX, int startY, int endX, int endY);
-void ExecuteMove(char piece, int startX, int startY, int endX, int endY);
+void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char promotionPiece);
 Vector2 *GeneratePieceMoves(char piece, int startX, int startY, int *moveCount);
 void UpdateCastlingRights(char piece, int startX, int startY, int endX, int endY);
 
 void LoadChessPieces() {
-    Image image = LoadImage("images/chesspieces.png");
+    Image image = LoadImage("images/chesspiecesL.png");
+    if (image.data == NULL) {
+        printf("Failed to load images/chesspiecesL.png, trying ../images/chesspiecesL.png\n");
+        image = LoadImage("../images/chesspiecesL.png");
+        if (image.data == NULL) {
+            printf("Failed to load chesspiecesL.png from both paths\n");
+            return; // Don't try to load a texture from a NULL image
+        } else {
+            printf("Loaded ../images/chesspiecesL.png successfully!\n");
+        }
+    } else {
+        printf("Loaded images/chesspiecesL.png successfully!\n");
+    }
     chessPieces = LoadTextureFromImage(image);
     UnloadImage(image);
 }
@@ -89,24 +110,19 @@ void DrawChessBoard() {
                 (blackKingInCheck && board[y][x] == 'k')) {
                 DrawRectangleRec(rect, checkColor);
             }
+        }
+    }
 
-            // Highlight possible moves for the selected piece in light blue
-            // After the loops that draw the squares
-            if (isDragging) {
-                int moveCount;
-                Vector2 *moves = GeneratePieceMoves(board[dragPieceY][dragPieceX], dragPieceX, dragPieceY, &moveCount);
-                for (int i = 0; i < moveCount; i++) {
-                    int moveX = (int)moves[i].x;
-                    int moveY = (int)moves[i].y;
-                    if (IsValidMove(dragPieceX, dragPieceY, moveX, moveY)) {
-                        Rectangle moveRect = {boardOffsetX + moveX * squareSize, boardOffsetY + moveY * squareSize, squareSize, squareSize};
-                        Color lightBlue = {173, 216, 230, 10};// Light blue color
-                        DrawRectangleRec(moveRect, lightBlue);
-                    }
-                }
-                free(moves);
+    // --- Highlight available moves for selected piece (persistent) ---
+    if (selectedPieceX != -1 && selectedPieceY != -1 && selectedMoves != NULL) {
+        for (int i = 0; i < selectedMoveCount; i++) {
+            int moveX = (int)selectedMoves[i].x;
+            int moveY = (int)selectedMoves[i].y;
+            if (IsValidMove(selectedPieceX, selectedPieceY, moveX, moveY)) {
+                Rectangle moveRect = {boardOffsetX + moveX * squareSize, boardOffsetY + moveY * squareSize, squareSize, squareSize};
+                Color lightBlue = {173, 216, 230, 100}; // More visible blue
+                DrawRectangleRec(moveRect, lightBlue);
             }
-
         }
     }
 
@@ -119,20 +135,21 @@ void DrawChessBoard() {
 
 void DrawPiece(char piece, int x, int y, bool isDragged) {
     int squareSize = chessBoardSize / 8;
-    Rectangle sourceRect = { 0.0f, 0.0f, 300.0f, 300.0f };
+    // Updated for new sprite size: 2880x960, each piece is 480x480
+    Rectangle sourceRect = { 0.0f, 0.0f, 480.0f, 480.0f };
     int row = (piece >= 'a' && piece <= 'z') ? 1 : 0;
     int col;
     switch (tolower(piece)) {
         case 'k': col = 0; break;
         case 'q': col = 1; break;
-        case 'r': col = 4; break;
-        case 'n': col = 3; break;
         case 'b': col = 2; break;
+        case 'n': col = 3; break;
+        case 'r': col = 4; break;
         case 'p': col = 5; break;
         default:  return;
     }
-    sourceRect.x = col * 300.0f;
-    sourceRect.y = row * 300.0f;
+    sourceRect.x = col * 480.0f;
+    sourceRect.y = row * 480.0f;
 
     // Adjust position to be relative to the centered chessboard
     Vector2 position = { boardOffsetX + x * squareSize, boardOffsetY + y * squareSize };
@@ -163,24 +180,90 @@ void DrawPieces() {
     }
 }
 
-void SetupBoardFromFEN(const char* fen) {
-    memset(board, ' ', sizeof(board)); // Initialize the board with empty spaces
+// --- AI move structure for full move info ---
+typedef struct {
+    int startX, startY, endX, endY;
+} Move;
+
+// --- FIXED SetupBoardFromFEN with bounds and FEN field check ---
+void SetupBoardFromFEN(const char *fen) {
+    memset(board, ' ', sizeof(board));
     int x = 0, y = 0;
-    while (*fen) {
-        if (*fen == '/') {
-            y++;
-            x = 0;
-        } else if (isdigit(*fen)) {
-            for (int j = 0; j < (*fen - '0'); j++) {
-                board[y][x + j] = ' ';
-            }
-            x += (*fen - '0');
+    const char *ptr = fen;
+    // Piece placement
+    while (*ptr && *ptr != ' ') {
+        char c = *ptr++;
+        if (c == '/') { y++; x = 0; continue; }
+        if (isdigit((unsigned char)c)) {
+            int run = c - '0';
+            while (run-- && x < 8) board[y][x++] = ' ';
         } else {
-            board[y][x] = *fen;
-            x++;
+            if (x < 8 && y < 8) board[y][x++] = c;
         }
-        fen++;
+        if (y >= 8) break;
     }
+    // Side to move
+    while (*ptr == ' ') ptr++;
+    isWhiteTurn = (*ptr == 'w');
+    while (*ptr && *ptr != ' ') ptr++;
+    // Castling rights
+    while (*ptr == ' ') ptr++;
+    whiteKingMoved = blackKingMoved = true;
+    whiteRookMoved[0] = whiteRookMoved[1] = true;
+    blackRookMoved[0] = blackRookMoved[1] = true;
+    if (*ptr != '-') {
+        for (; *ptr && *ptr != ' '; ptr++) {
+            switch (*ptr) {
+                case 'K': whiteKingMoved = false; whiteRookMoved[1] = false; break;
+                case 'Q': whiteKingMoved = false; whiteRookMoved[0] = false; break;
+                case 'k': blackKingMoved = false; blackRookMoved[1] = false; break;
+                case 'q': blackKingMoved = false; blackRookMoved[0] = false; break;
+            }
+        }
+    } else {
+        ptr++;
+    }
+    // En passant
+    while (*ptr == ' ') ptr++;
+    if (*ptr != '-') {
+        int file = ptr[0] - 'a';
+        int rank = 8 - (ptr[1] - '0');
+        enPassantCaptureSquare.x = file;
+        enPassantCaptureSquare.y = rank;
+        ptr += 2;
+    } else {
+        enPassantCaptureSquare.x = -1;
+        enPassantCaptureSquare.y = -1;
+        ptr++;
+    }
+    // (Optionally: parse halfmove/fullmove clocks here if needed)
+}
+
+// --- PrintBoard for debugging ---
+void PrintBoard() {
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++)
+            putchar(board[r][c] == ' ' ? '.' : board[r][c]);
+        putchar('\n');
+    }
+}
+
+// --- CheckKingsCount returns bool and aborts on error ---
+bool CheckKingsCount() {
+    int whiteKings = 0, blackKings = 0;
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            if (board[y][x] == 'K') whiteKings++;
+            else if (board[y][x] == 'k') blackKings++;
+        }
+    }
+    if (whiteKings != 1 || blackKings != 1) {
+        printf("Error: Invalid king count detected!\n");
+        gameOver = true;
+        gameOverMessage = "Invalid king count!";
+        return false;
+    }
+    return true;
 }
 
 
@@ -235,8 +318,10 @@ bool IsPathClear(int startX, int startY, int endX, int endY) {
     return true;
 }
 
+// --- FIXED IsOpponentPiece with bounds check ---
 bool IsOpponentPiece(char piece, int x, int y) {
-    if (board[y][x] == ' ') return false; // Empty square
+    if (x < 0 || x >= 8 || y < 0 || y >= 8) return false;
+    if (board[y][x] == ' ') return false;
     return isupper(piece) != isupper(board[y][x]);
 }
 
@@ -245,134 +330,136 @@ Vector2 *GeneratePieceMoves(char piece, int startX, int startY, int *moveCount) 
     Vector2 *moves = NULL;
     *moveCount = 0;
 
-    // Function to add a move to the moves array
-    void addMove(int x, int y) {
-        if (x >= 0 && x < 8 && y >= 0 && y < 8) {
-            if (board[y][x] == ' ' || IsOpponentPiece(piece, x, y)) {
-                moves = realloc(moves, (*moveCount + 1) * sizeof(Vector2));
-                moves[*moveCount] = (Vector2){x, y};
-                (*moveCount)++;
-            }
+    // Helper macro to add a move
+    #define ADD_MOVE(x, y) \
+        if ((x) >= 0 && (x) < 8 && (y) >= 0 && (y) < 8) { \
+            if (board[(y)][(x)] == ' ' || IsOpponentPiece(piece, (x), (y))) { \
+                moves = realloc(moves, ((*moveCount) + 1) * sizeof(Vector2)); \
+                moves[*moveCount] = (Vector2){(x), (y)}; \
+                (*moveCount)++; \
+            } \
         }
-    }
 
-     // Function to add line moves (for rook, bishop, queen)
-    void addLineMoves(int dx, int dy) {
-        int x = startX + dx;
-        int y = startY + dy;
-        while (x >= 0 && x < 8 && y >= 0 && y < 8) {
-            if (board[y][x] != ' ' && !IsOpponentPiece(piece, x, y)) break;
-            addMove(x, y);
-            if (board[y][x] != ' ') break; // Stop if hit a piece
-            x += dx;
-            y += dy;
+    // Helper macro to add line moves (for rook, bishop, queen)
+    #define ADD_LINE_MOVES(dx, dy) \
+        { \
+            int x = startX + (dx); \
+            int y = startY + (dy); \
+            while (x >= 0 && x < 8 && y >= 0 && y < 8) { \
+                if (board[y][x] != ' ' && !IsOpponentPiece(piece, x, y)) break; \
+                ADD_MOVE(x, y); \
+                if (board[y][x] != ' ') break; \
+                x += (dx); \
+                y += (dy); \
+            } \
         }
-    }
+
     switch (tolower(piece)) {
         case 'p': { // Pawn
-            int direction = isupper(piece) ? -1 : 1;  // Define direction once for the pawn
+            int direction = isupper(piece) ? -1 : 1;
             // Forward move
             if (board[startY + direction][startX] == ' ') {
-                addMove(startX, startY + direction);
+                ADD_MOVE(startX, startY + direction);
                 // Initial two-square move
                 if ((isupper(piece) && startY == 6) || (!isupper(piece) && startY == 1)) {
                     if (board[startY + 2 * direction][startX] == ' ') {
-                        addMove(startX, startY + 2 * direction);
+                        ADD_MOVE(startX, startY + 2 * direction);
                     }
                 }
             }
             // Captures
             if (IsOpponentPiece(piece, startX - 1, startY + direction)) {
-                addMove(startX - 1, startY + direction);
+                ADD_MOVE(startX - 1, startY + direction);
             }
             if (IsOpponentPiece(piece, startX + 1, startY + direction)) {
-                addMove(startX + 1, startY + direction);
+                ADD_MOVE(startX + 1, startY + direction);
             }
-
             // En passant capture
             if (startY == (isupper(piece) ? 3 : 4)) {
                 if (enPassantCaptureSquare.x == startX - 1 && enPassantCaptureSquare.y == startY + direction) {
-                    addMove(startX - 1, startY + direction);
+                    ADD_MOVE(startX - 1, startY + direction);
                 }
                 if (enPassantCaptureSquare.x == startX + 1 && enPassantCaptureSquare.y == startY + direction) {
-                    addMove(startX + 1, startY + direction);
+                    ADD_MOVE(startX + 1, startY + direction);
                 }
             }
-        
             break;
         }
-
         case 'n': { // Knight
             int knightMoves[8][2] = {{-2, -1}, {-1, -2}, {1, -2}, {2, -1}, {2, 1}, {1, 2}, {-1, 2}, {-2, 1}};
             for (int i = 0; i < 8; i++) {
                 int x = startX + knightMoves[i][0];
                 int y = startY + knightMoves[i][1];
-                if ((board[y][x] == ' ') || IsOpponentPiece(piece, x, y)) {
-                    addMove(x, y);
+                if ((x) >= 0 && (x) < 8 && (y) >= 0 && (y) < 8) {
+                    if (board[y][x] == ' ' || IsOpponentPiece(piece, x, y)) {
+                        ADD_MOVE(x, y);
+                    }
                 }
             }
             break;
         }
         case 'r': { // Rook
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    if (dx == 0 || dy == 0) addLineMoves(dx, dy);
-                }
-            }
+            ADD_LINE_MOVES(1, 0);
+            ADD_LINE_MOVES(-1, 0);
+            ADD_LINE_MOVES(0, 1);
+            ADD_LINE_MOVES(0, -1);
             break;
         }
         case 'b': { // Bishop
-            for (int dx = -1; dx <= 1; dx += 2) {
-                for (int dy = -1; dy <= 1; dy += 2) {
-                    addLineMoves(dx, dy);
-                }
-            }
+            ADD_LINE_MOVES(1, 1);
+            ADD_LINE_MOVES(-1, 1);
+            ADD_LINE_MOVES(1, -1);
+            ADD_LINE_MOVES(-1, -1);
             break;
         }
         case 'q': { // Queen
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    if (dx != 0 || dy != 0) addLineMoves(dx, dy);
-                }
-            }
+            ADD_LINE_MOVES(1, 0);
+            ADD_LINE_MOVES(-1, 0);
+            ADD_LINE_MOVES(0, 1);
+            ADD_LINE_MOVES(0, -1);
+            ADD_LINE_MOVES(1, 1);
+            ADD_LINE_MOVES(-1, 1);
+            ADD_LINE_MOVES(1, -1);
+            ADD_LINE_MOVES(-1, -1);
             break;
         }
         case 'k': { // King
-            // for normal king moves
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dy = -1; dy <= 1; dy++) {
-                    if (dx != 0 || dy != 0) addMove(startX + dx, startY + dy);
+                    if (dx != 0 || dy != 0) ADD_MOVE(startX + dx, startY + dy);
                 }
             }
             // Castling logic
-            if (tolower(piece) == 'k') { // White king
+            if (isupper(piece)) { // White king
                 if (!whiteKingMoved) {
                     // Castling kingside (short castling)
                     if (!whiteRookMoved[1] && board[startY][5] == ' ' && board[startY][6] == ' ') {
-                        addMove(6, startY);
+                        ADD_MOVE(6, startY);
                     }
                     // Castling queenside (long castling)
                     if (!whiteRookMoved[0] && board[startY][1] == ' ' && board[startY][2] == ' ' && board[startY][3] == ' ') {
-                        addMove(2, startY);
+                        ADD_MOVE(2, startY);
                     }
                 }
-            } else if (tolower(piece) == 'k') { // Black king
+            } else { // Black king
                 if (!blackKingMoved) {
                     // Castling kingside (short castling)
                     if (!blackRookMoved[1] && board[startY][5] == ' ' && board[startY][6] == ' ') {
-                        addMove(6, startY);
+                        ADD_MOVE(6, startY);
                     }
                     // Castling queenside (long castling)
                     if (!blackRookMoved[0] && board[startY][1] == ' ' && board[startY][2] == ' ' && board[startY][3] == ' ') {
-                        addMove(2, startY);
+                        ADD_MOVE(2, startY);
                     }
                 }
             }
             break;
         }
-
     }
-    return moves; 
+
+    #undef ADD_MOVE
+    #undef ADD_LINE_MOVES
+    return moves;
 }
 
 
@@ -397,26 +484,6 @@ Vector2 *GenerateMoves(bool isWhite, int *totalMoveCount) {
     return allMoves;
 }
 
-void CheckKingsCount() {
-    int whiteKings = 0, blackKings = 0;
-
-    // Count the number of white and black kings on the board
-    for (int y = 0; y < 8; y++) {
-        for (int x = 0; x < 8; x++) {
-            if (board[y][x] == 'K') {
-                whiteKings++;
-            } else if (board[y][x] == 'k') {
-                blackKings++;
-            }
-        }
-    }
-
-   if (whiteKings > 1 || blackKings > 1) {
-        printf("Error: Invalid king count detected!\n");
-        }
-}
-
-
 bool IsValidMove(int startX, int startY, int endX, int endY) {
     // Validate the basic movement rules
     int moveCount;
@@ -435,24 +502,28 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
         return false; // The move is not valid according to basic chess rules
     }
 
-    // Now check if the move does not leave player's own king in check
     char tempStart = board[startY][startX];
     char tempEnd = board[endY][endX];
     bool isWhiteMove = isupper(tempStart);
 
-    // Check for castling conditions
+    // --- Castling path check: clear destination square if occupied by opponent ---
     if (tolower(tempStart) == 'k' && abs(startX - endX) == 2) {
         int castleY = isWhiteMove ? 7 : 0;
         int direction = (endX > startX) ? 1 : -1;
         bool previouslyMoved = isWhiteMove ? whiteKingMoved : blackKingMoved; // store original state
-
+        char savedSquares[3] = {' ', ' ', ' '};
+        int idx = 0;
         for (int x = startX + direction; x != endX + direction; x += direction) {
-            if ((board[castleY][x] != ' ' && x != endX) || IsKingInCheck(isWhiteMove)) {
+            char orig = board[castleY][x];
+            if ((orig != ' ' && x != endX) || IsKingInCheck(isWhiteMove)) {
                 return false; // The king is moving through or into check
             }
             // Temporarily move the king for check detection
             board[castleY][startX] = ' ';
-            board[castleY][x] = tempStart;
+            if (x == endX) {
+                savedSquares[idx] = board[castleY][x];
+                board[castleY][x] = tempStart;
+            }
             if (isWhiteMove) {
                 whiteKingMoved = true;
             } else {
@@ -461,7 +532,7 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
             if (IsKingInCheck(isWhiteMove)) {
                 // Undo the king move and reset moved state
                 board[castleY][startX] = tempStart;
-                board[castleY][x] = ' ';
+                if (x == endX) board[castleY][x] = savedSquares[idx];
                 if (isWhiteMove) {
                     whiteKingMoved = previouslyMoved;
                 } else {
@@ -471,7 +542,8 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
             }
             // Undo the king move
             board[castleY][startX] = tempStart;
-            board[castleY][x] = ' ';
+            if (x == endX) board[castleY][x] = savedSquares[idx];
+            idx++;
         }
         // reset king move state before returning true
         if (isWhiteMove) {
@@ -481,84 +553,74 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
         }
     }
 
-    // Make the move temporarily
-    board[startY][startX] = ' ';
-    board[endY][endX] = tempStart;
+    // --- En passant legality: temporarily remove captured pawn ---
+    bool isEnPassant = (tolower(tempStart) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1 && tempEnd == ' ');
+    char capturedPawn = 0;
+    if (isEnPassant) {
+        int captureRow = isupper(tempStart) ? 3 : 4;
+        capturedPawn = board[captureRow][endX];
+        board[startY][startX] = ' ';
+        board[captureRow][endX] = ' ';
+        board[endY][endX] = tempStart;
+    } else {
+        // Make the move temporarily
+        board[startY][startX] = ' ';
+        board[endY][endX] = tempStart;
+    }
 
     bool isPlayerKingInCheck = IsKingInCheck(isWhiteMove);  // Check if player's own king is in check
 
     // Revert the move
-    board[startY][startX] = tempStart;
-    board[endY][endX] = tempEnd;
+    if (isEnPassant) {
+        board[startY][startX] = tempStart;
+        board[endY][endX] = tempEnd;
+        int captureRow = isupper(tempStart) ? 3 : 4;
+        board[captureRow][endX] = capturedPawn;
+    } else {
+        board[startY][startX] = tempStart;
+        board[endY][endX] = tempEnd;
+    }
 
     if (isPlayerKingInCheck) {
         return false; // The move leaves player's own king in check
     }
 
     return true; // The move is valid
-  
-
-    
-   // En passant validation
-    if (tolower(board[startY][startX]) == 'p' && endX == enPassantCaptureSquare.x && endY == enPassantCaptureSquare.y) {
-        int pawnDirection = isupper(board[startY][startX]) ? -1 : 1;
-        int captureRow = startY;
-        char capturedPawn = board[captureRow][endX];
-        board[captureRow][endX] = ' '; // Temporarily remove the captured pawn
-
-        // Make the temporary en passant move
-        board[startY][startX] = ' ';
-        board[endY][endX] = board[captureRow][endX];
-
-        bool isPlayerKingInCheck = IsKingInCheck(isupper(board[startY][startX]));
-
-        // Revert the board back to original
-        board[startY][startX] = isupper(board[startY][startX]) ? 'P' : 'p';
-        board[endY][endX] = ' ';
-        board[captureRow][endX] = capturedPawn;
-
-        if (isPlayerKingInCheck) return false; // King would be in check after en passant, so the move is not valid
-    }
-    
-
-
 }
 
-void PerformAIMove(bool isWhite) {
-    int totalMoveCount;
-    Vector2 *moves = GenerateMoves(isWhite, &totalMoveCount);
+// --- Promotion state ---
+bool promotionPending = false;
+int promotionFromX = -1, promotionFromY = -1, promotionToX = -1, promotionToY = -1;
+char promotionColor = 0; // 'w' or 'b'
+char promotionChosen = 0; // 'Q', 'R', 'B', 'N' (uppercase for white, lowercase for black)
 
-    if (totalMoveCount > 0) {
-        int randomIndex = rand() % totalMoveCount;
-        Vector2 selectedMove = moves[randomIndex];
-
-        for (int y = 0; y < 8; y++) {
-            for (int x = 0; x < 8; x++) {
-                if ((isWhite && isupper(board[y][x])) || (!isWhite && islower(board[y][x]))) {
-                    int pieceMoveCount;
-                    Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &pieceMoveCount);
-
-                    for (int j = 0; j < pieceMoveCount; j++) {
-                        if (pieceMoves[j].x == selectedMove.x && pieceMoves[j].y == selectedMove.y) {
-                            if (IsValidMove(x, y, (int)selectedMove.x, (int)selectedMove.y)) {
-                                char movedPiece = board[y][x];
-                                ExecuteMove(movedPiece, x, y, (int)selectedMove.x, (int)selectedMove.y);
-                                goto moveMade;
-                            }
-                        }
-                    }
-                    free(pieceMoves);
-                }
-            }
-        }
+// Helper to print move in algebraic notation
+void PrintMove(int startX, int startY, int endX, int endY, char movedPiece, char promotionPiece) {
+    char files[] = "abcdefgh";
+    char moveStr[8];
+    if (tolower(movedPiece) == 'p' && ((isupper(movedPiece) && endY == 0) || (!isupper(movedPiece) && endY == 7)) && promotionPiece) {
+        // e7e8q
+        snprintf(moveStr, sizeof(moveStr), "%c%d%c%d%c",
+            files[startX], 8 - startY,
+            files[endX], 8 - endY,
+            tolower(promotionPiece));
+    } else {
+        // e2e4
+        snprintf(moveStr, sizeof(moveStr), "%c%d%c%d",
+            files[startX], 8 - startY,
+            files[endX], 8 - endY);
     }
-
-    moveMade:
-    free(moves);
-    CheckKingsCount();
+    printf("%s\n", moveStr);
 }
 
-void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
+// Add a flag to suppress double printing for AI
+static bool suppressPrintMove = false;
+
+void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char promotionPiece) {
+    // Print move for human (AI sets suppressPrintMove)
+    if (!suppressPrintMove) {
+        PrintMove(startX, startY, endX, endY, piece, promotionPiece);
+    }
     // Check if the move is a pawn move or a capture
     if (tolower(piece) == 'p' || board[endY][endX] != ' ') {
         halfMoveClock = 0;
@@ -569,6 +631,7 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
     if (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1) {
         int captureRow = isupper(piece) ? 3 : 4; // Opponent's pawn row
         board[captureRow][endX] = ' ';
+        halfMoveClock = 0; // Reset for en passant
     }
     // Set or reset en passant capture square for pawn moves
     if (tolower(piece) == 'p' && abs(startY - endY) == 2) { // Two-square move
@@ -580,8 +643,37 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
     // Pawn promotion logic
     if (tolower(piece) == 'p') {
         if ((isupper(piece) && endY == 0) || (!isupper(piece) && endY == 7)) {
-            // Promote pawn to queen
-            piece = isupper(piece) ? 'Q' : 'q';
+            if (promotionPiece) {
+                piece = promotionPiece;
+            } else {
+                piece = isupper(piece) ? 'Q' : 'q';
+            }
+            halfMoveClock = 0; // Reset for promotion
+        }
+    }
+
+    // --- Castling rook movement ---
+    if (tolower(piece) == 'k' && abs(startX - endX) == 2) {
+        if (isupper(piece)) { // White
+            if (endX == 6) { // Kingside
+                board[7][5] = 'R';
+                board[7][7] = ' ';
+                whiteRookMoved[1] = true;
+            } else if (endX == 2) { // Queenside
+                board[7][3] = 'R';
+                board[7][0] = ' ';
+                whiteRookMoved[0] = true;
+            }
+        } else { // Black
+            if (endX == 6) { // Kingside
+                board[0][5] = 'r';
+                board[0][7] = ' ';
+                blackRookMoved[1] = true;
+            } else if (endX == 2) { // Queenside
+                board[0][3] = 'r';
+                board[0][0] = ' ';
+                blackRookMoved[0] = true;
+            }
         }
     }
 
@@ -594,6 +686,44 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY) {
     UpdateCastlingRights(piece, startX, startY, endX, endY);
     lastEnd.x = endX;
     lastEnd.y = endY;
+}
+
+// Add PerformAIMove definition above ExecuteMove
+void PerformAIMove(bool isWhite) {
+    // Build a list of all legal moves with full info
+    Move *legalMoves = NULL;
+    int legalMoveCount = 0;
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            if ((isWhite && isupper(board[y][x])) || (!isWhite && islower(board[y][x]))) {
+                int moveCount;
+                Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &moveCount);
+                for (int j = 0; j < moveCount; j++) {
+                    int ex = (int)pieceMoves[j].x, ey = (int)pieceMoves[j].y;
+                    if (IsValidMove(x, y, ex, ey)) {
+                        legalMoves = realloc(legalMoves, (legalMoveCount + 1) * sizeof(Move));
+                        legalMoves[legalMoveCount++] = (Move){x, y, ex, ey};
+                    }
+                }
+                free(pieceMoves);
+            }
+        }
+    }
+    if (legalMoveCount > 0) {
+        int randomIndex = rand() % legalMoveCount;
+        Move selected = legalMoves[randomIndex];
+        char movedPiece = board[selected.startY][selected.startX];
+        char promo = 0;
+        if (tolower(movedPiece) == 'p' && ((isupper(movedPiece) && selected.endY == 0) || (!isupper(movedPiece) && selected.endY == 7))) {
+            promo = isupper(movedPiece) ? 'Q' : 'q';
+        }
+        PrintMove(selected.startX, selected.startY, selected.endX, selected.endY, movedPiece, promo);
+        suppressPrintMove = true;
+        ExecuteMove(movedPiece, selected.startX, selected.startY, selected.endX, selected.endY, promo);
+        suppressPrintMove = false;
+    }
+    free(legalMoves);
+    CheckKingsCount();
 }
 
 bool IsInsufficientMaterial() {
@@ -649,15 +779,113 @@ void UpdateCastlingRights(char piece, int startX, int startY, int endX, int endY
     }
 }
 
+void HandlePromotionPopup() {
+    if (!promotionPending) return;
+    int w = 320, h = 180;
+    int x = (GetScreenWidth() - w) / 2;
+    int y = (GetScreenHeight() - h) / 2;
+    Rectangle box = {x, y, w, h};
+    int result = GuiMessageBox(box, "Pawn Promotion", "Choose piece to promote to:", "Queen;Rook;Bishop;Knight");
+    if (result > 0) {
+        char promo = 0;
+        if (promotionColor == 'w') {
+            if (result == 1) promo = 'Q';
+            if (result == 2) promo = 'R';
+            if (result == 3) promo = 'B';
+            if (result == 4) promo = 'N';
+        } else {
+            if (result == 1) promo = 'q';
+            if (result == 2) promo = 'r';
+            if (result == 3) promo = 'b';
+            if (result == 4) promo = 'n';
+        }
+        ExecuteMove(board[promotionFromY][promotionFromX], promotionFromX, promotionFromY, promotionToX, promotionToY, promo);
+        promotionPending = false;
+        promotionFromX = promotionFromY = promotionToX = promotionToY = -1;
+        promotionColor = 0;
+        promotionChosen = 0;
+    }
+}
+
+void HandlePieceSelection() {
+    int squareSize = chessBoardSize / 8;
+    if (promotionPending) return; // Block input during promotion
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        Vector2 mousePos = GetMousePosition();
+        int x = (mousePos.x - boardOffsetX) / squareSize;
+        int y = (mousePos.y - boardOffsetY) / squareSize;
+        if (x < 0 || x >= 8 || y < 0 || y >= 8) {
+            // Clicked outside the board: deselect
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
+            return;
+        }
+        // If a piece is already selected
+        if (selectedPieceX != -1 && selectedPieceY != -1 && selectedMoves != NULL) {
+            // Clicked the same piece again: deselect
+            if (x == selectedPieceX && y == selectedPieceY) {
+                if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+                selectedPieceX = selectedPieceY = -1;
+                selectedMoveCount = 0;
+                return;
+            }
+            // Clicked a valid move square: move the piece
+            for (int i = 0; i < selectedMoveCount; i++) {
+                if ((int)selectedMoves[i].x == x && (int)selectedMoves[i].y == y) {
+                    if (IsValidMove(selectedPieceX, selectedPieceY, x, y)) {
+                        char piece = board[selectedPieceY][selectedPieceX];
+                        // Check for promotion
+                        if (tolower(piece) == 'p' && ((isupper(piece) && y == 0) || (!isupper(piece) && y == 7))) {
+                            promotionPending = true;
+                            promotionFromX = selectedPieceX;
+                            promotionFromY = selectedPieceY;
+                            promotionToX = x;
+                            promotionToY = y;
+                            promotionColor = isupper(piece) ? 'w' : 'b';
+                            return;
+                        } else {
+                            ExecuteMove(piece, selectedPieceX, selectedPieceY, x, y, 0);
+                        }
+                        lastEnd.x = x;
+                        lastEnd.y = y;
+                        if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+                        selectedPieceX = selectedPieceY = -1;
+                        selectedMoveCount = 0;
+                        return;
+                    }
+                }
+            }
+            // Clicked elsewhere: deselect
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
+            return;
+        }
+        // No piece selected: select if it's your own piece
+        if (board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = x;
+            selectedPieceY = y;
+            selectedMoves = GeneratePieceMoves(board[y][x], x, y, &selectedMoveCount);
+        } else {
+            // Clicked on empty square or opponent's piece: deselect
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
+        }
+    }
+}
+
 void HandlePieceDragging() {
     int squareSize = chessBoardSize / 8;
-
+    if (promotionPending) return; // Block input during promotion
     // Start dragging
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !isDragging) {
         Vector2 mousePos = GetMousePosition();
         int x = (mousePos.x - boardOffsetX) / squareSize;
         int y = (mousePos.y - boardOffsetY) / squareSize;
-
+        if (x < 0 || x >= 8 || y < 0 || y >= 8) return; // Bounds check
         if (board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
             isDragging = true;
             dragPieceX = x;
@@ -666,6 +894,11 @@ void HandlePieceDragging() {
             dragOffset.y = mousePos.y - positions[y][x].y;
             lastStart.x = x;
             lastStart.y = y;
+            // --- Also select the piece for persistent highlighting ---
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = x;
+            selectedPieceY = y;
+            selectedMoves = GeneratePieceMoves(board[y][x], x, y, &selectedMoveCount);
         }
     }
 
@@ -681,15 +914,42 @@ void HandlePieceDragging() {
         Vector2 mousePos = GetMousePosition();
         int endX = (mousePos.x - boardOffsetX) / squareSize;
         int endY = (mousePos.y - boardOffsetY) / squareSize;
-
+        if (endX < 0 || endX >= 8 || endY < 0 || endY >= 8) {
+            // Revert to original position if out of bounds
+            lastEnd.x = dragPieceX;
+            lastEnd.y = dragPieceY;
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
+            return;
+        }
         if (IsValidMove(dragPieceX, dragPieceY, endX, endY)) {
-            ExecuteMove(board[dragPieceY][dragPieceX], dragPieceX, dragPieceY, endX, endY);
+            char piece = board[dragPieceY][dragPieceX];
+            // Check for promotion
+            if (tolower(piece) == 'p' && ((isupper(piece) && endY == 0) || (!isupper(piece) && endY == 7))) {
+                promotionPending = true;
+                promotionFromX = dragPieceX;
+                promotionFromY = dragPieceY;
+                promotionToX = endX;
+                promotionToY = endY;
+                promotionColor = isupper(piece) ? 'w' : 'b';
+                return;
+            } else {
+                ExecuteMove(piece, dragPieceX, dragPieceY, endX, endY, 0);
+            }
             lastEnd.x = endX;
             lastEnd.y = endY;
+            // --- After move, deselect ---
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
         } else {
             // Revert to original position if the move is not valid
             lastEnd.x = dragPieceX;
             lastEnd.y = dragPieceY;
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
         }
     }
 }
@@ -704,12 +964,26 @@ void Mode() {
     }
 }
 
-bool gameOver = false;
-char* gameOverMessage = "";
+// Helper to print game mode
+void PrintGameMode(void) {
+    const char* modeStr = "";
+    switch (currentMode) {
+        case MODE_NORMAL: modeStr = "Normal Mode"; break;
+        case MODE_PLAY_WHITE: modeStr = "Play as White"; break;
+        case MODE_PLAY_BLACK: modeStr = "Play as Black"; break;
+        case MODE_AI_VS_AI: modeStr = "AI vs AI"; break;
+    }
+    printf("\n==============================\n");
+    printf("New Game: %s\n", modeStr);
+    printf("==============================\n");
+}
+
 
 int main(void) {
     InitWindow(screenWidth, screenHeight, "Chess Engine");
     char fenString[] = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    float boardScale = 0.8f;
+    chessBoardSize = (int)((screenWidth < screenHeight ? screenWidth : screenHeight) * boardScale);
     boardOffsetX = (screenWidth - chessBoardSize) / 2;
     boardOffsetY = (screenHeight - chessBoardSize) / 2;
     Image chessImage = LoadImage("images/chess.png");
@@ -717,17 +991,27 @@ int main(void) {
     UnloadImage(chessImage);
     LoadChessPieces();
     SetupBoardFromFEN(fenString);
+    PrintBoard(); // Debug: print board after FEN setup
     CheckKingsCount();
     SetTargetFPS(60);
     srand(time(NULL));
-    ToggleFullscreen();
+    // ToggleFullscreen();
     
 
     // Main game loop
     while (!WindowShouldClose()) {
+        // Handle window resizing
+        if (IsWindowResized()) {
+            int newWidth = GetScreenWidth();
+            int newHeight = GetScreenHeight();
+            chessBoardSize = (int)((newWidth < newHeight ? newWidth : newHeight) * boardScale);
+            boardOffsetX = (newWidth - chessBoardSize) / 2;
+            boardOffsetY = (newHeight - chessBoardSize) / 2;
+        }
         // Update game logic
         if (!gameOver) {
             if (currentMode != MODE_AI_VS_AI) {
+                HandlePieceSelection(); // <--- NEW: handle selection for persistent highlight
                 HandlePieceDragging();
             }
 
@@ -743,8 +1027,7 @@ int main(void) {
         ClearBackground(DGRAY);
         DrawChessBoard();
         DrawPieces();
-
-        
+        HandlePromotionPopup();
 
 
         int buttonHeight = 50;
@@ -756,6 +1039,8 @@ int main(void) {
             if (currentMode != MODE_NORMAL) {
                 currentMode = MODE_NORMAL;
                 SetupBoardFromFEN(fenString);
+                isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
+                PrintGameMode();
             }
         }
 
@@ -764,6 +1049,8 @@ int main(void) {
             if (currentMode != MODE_PLAY_WHITE) {
                 currentMode = MODE_PLAY_WHITE;
                 SetupBoardFromFEN(fenString);
+                isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
+                PrintGameMode();
             }
         }
 
@@ -772,6 +1059,8 @@ int main(void) {
             if (currentMode != MODE_PLAY_BLACK) {
                 currentMode = MODE_PLAY_BLACK;
                 SetupBoardFromFEN(fenString);
+                isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
+                PrintGameMode();
             }
         }
 
@@ -780,6 +1069,8 @@ int main(void) {
             if (currentMode != MODE_AI_VS_AI) {
                 currentMode = MODE_AI_VS_AI;
                 SetupBoardFromFEN(fenString);
+                isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
+                PrintGameMode();
             }
         }
 
@@ -793,6 +1084,8 @@ int main(void) {
                 whiteRookMoved[i] = blackRookMoved[i] = false;
             }
             gameOver = false;
+            isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
+            PrintGameMode();
         }
 
         // Quit button
@@ -802,27 +1095,37 @@ int main(void) {
         }
 
 
-        if (!gameOver) {
+        // --- LEGAL MOVE COUNTING FOR GAME OVER ---
+        int totalMoveCount = 0;
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                if ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x]))) {
+                    int moveCount;
+                    Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &moveCount);
+                    for (int i = 0; i < moveCount; i++) {
+                        if (IsValidMove(x, y, (int)pieceMoves[i].x, (int)pieceMoves[i].y)) {
+                            totalMoveCount++;
+                        }
+                    }
+                    free(pieceMoves);
+                }
+            }
+        }
+        if (totalMoveCount == 0) {
+            gameOver = true;
             bool whiteKingInCheck = IsKingInCheck(true);
             bool blackKingInCheck = IsKingInCheck(false);
-
-            int totalMoveCount;
-            GenerateMoves(isWhiteTurn, &totalMoveCount);
-
-            if (totalMoveCount == 0) {
-                gameOver = true;
-                if ((isWhiteTurn && whiteKingInCheck) || (!isWhiteTurn && blackKingInCheck)) {
-                    gameOverMessage = isWhiteTurn ? "Black wins by checkmate!" : "White wins by checkmate!";
-                } else {
-                    gameOverMessage = "Stalemate!"; // Stalemate condition
-                }
-            } else if (IsFiftyMoveRule() || IsSeventyFiveMoveRule()) {
-                gameOver = true;
-                gameOverMessage = "Draw by move rule!";
-            } else if (IsInsufficientMaterial()) {
-                gameOver = true;
-                gameOverMessage = "Draw by insufficient material!";
+            if ((isWhiteTurn && whiteKingInCheck) || (!isWhiteTurn && blackKingInCheck)) {
+                gameOverMessage = isWhiteTurn ? "Black wins by checkmate!" : "White wins by checkmate!";
+            } else {
+                gameOverMessage = "Stalemate!"; // Stalemate condition
             }
+        } else if (IsFiftyMoveRule() || IsSeventyFiveMoveRule()) {
+            gameOver = true;
+            gameOverMessage = "Draw by move rule!";
+        } else if (IsInsufficientMaterial()) {
+            gameOver = true;
+            gameOverMessage = "Draw by insufficient material!";
         }
 
 
