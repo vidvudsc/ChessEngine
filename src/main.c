@@ -110,17 +110,37 @@ void DrawChessBoard() {
                 (blackKingInCheck && board[y][x] == 'k')) {
                 DrawRectangleRec(rect, checkColor);
             }
+            // Highlight selected piece with yellow
+            if (selectedPieceX == x && selectedPieceY == y) {
+                Color yellow = {255, 255, 0, 120};
+                DrawRectangleRec(rect, yellow);
+                // Optionally, draw a border for extra clarity:
+                DrawRectangleLinesEx(rect, 3, (Color){255, 215, 0, 255});
+            }
         }
     }
 
-    // --- Highlight available moves for selected piece (persistent) ---
-    if (selectedPieceX != -1 && selectedPieceY != -1 && selectedMoves != NULL) {
+    // Show legal moves for the piece being dragged, or for the selected piece
+    if (isDragging) {
+        int moveCount = 0;
+        Vector2 *moves = GeneratePieceMoves(board[dragPieceY][dragPieceX], dragPieceX, dragPieceY, &moveCount);
+        for (int i = 0; i < moveCount; i++) {
+            int moveX = (int)moves[i].x;
+            int moveY = (int)moves[i].y;
+            if (IsValidMove(dragPieceX, dragPieceY, moveX, moveY)) {
+                Rectangle moveRect = {boardOffsetX + moveX * squareSize, boardOffsetY + moveY * squareSize, squareSize, squareSize};
+                Color lightBlue = {173, 216, 230, 100};
+                DrawRectangleRec(moveRect, lightBlue);
+            }
+        }
+        free(moves);
+    } else if (selectedPieceX != -1 && selectedPieceY != -1 && selectedMoves != NULL) {
         for (int i = 0; i < selectedMoveCount; i++) {
             int moveX = (int)selectedMoves[i].x;
             int moveY = (int)selectedMoves[i].y;
             if (IsValidMove(selectedPieceX, selectedPieceY, moveX, moveY)) {
                 Rectangle moveRect = {boardOffsetX + moveX * squareSize, boardOffsetY + moveY * squareSize, squareSize, squareSize};
-                Color lightBlue = {173, 216, 230, 100}; // More visible blue
+                Color lightBlue = {173, 216, 230, 100};
                 DrawRectangleRec(moveRect, lightBlue);
             }
         }
@@ -807,15 +827,65 @@ void HandlePromotionPopup() {
     }
 }
 
-void HandlePieceSelection() {
+// --- Classic chess input: click-to-select, click-to-move, drag-to-move (immediate drag) ---
+void HandleInput() {
     int squareSize = chessBoardSize / 8;
     if (promotionPending) return; // Block input during promotion
+    Vector2 mousePos = GetMousePosition();
+    int x = (mousePos.x - boardOffsetX) / squareSize;
+    int y = (mousePos.y - boardOffsetY) / squareSize;
+
+    // --- Dragging logic: allow immediate drag ---
+    static bool isDragInitiated = false;
+    static Vector2 dragStartPos = {0};
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        Vector2 mousePos = GetMousePosition();
-        int x = (mousePos.x - boardOffsetX) / squareSize;
-        int y = (mousePos.y - boardOffsetY) / squareSize;
+        dragStartPos = mousePos;
+        isDragInitiated = false;
+        // If you press on your own piece, start dragging immediately
+        if (x >= 0 && x < 8 && y >= 0 && y < 8 && board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
+            isDragging = true;
+            dragPieceX = x;
+            dragPieceY = y;
+            dragOffset.x = dragStartPos.x - positions[y][x].x;
+            dragOffset.y = dragStartPos.y - positions[y][x].y;
+            lastStart.x = x;
+            lastStart.y = y;
+            isDragInitiated = true;
+        }
+    }
+    if (isDragging && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        positions[dragPieceY][dragPieceX] = (Vector2){ mousePos.x - dragOffset.x, mousePos.y - dragOffset.y };
+    }
+    if (isDragging && IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+        isDragging = false;
+        int endX = (mousePos.x - boardOffsetX) / squareSize;
+        int endY = (mousePos.y - boardOffsetY) / squareSize;
+        if (endX >= 0 && endX < 8 && endY >= 0 && endY < 8 && IsValidMove(dragPieceX, dragPieceY, endX, endY)) {
+            char piece = board[dragPieceY][dragPieceX];
+            if (tolower(piece) == 'p' && ((isupper(piece) && endY == 0) || (!isupper(piece) && endY == 7))) {
+                promotionPending = true;
+                promotionFromX = dragPieceX;
+                promotionFromY = dragPieceY;
+                promotionToX = endX;
+                promotionToY = endY;
+                promotionColor = isupper(piece) ? 'w' : 'b';
+                return;
+            } else {
+                ExecuteMove(piece, dragPieceX, dragPieceY, endX, endY, 0);
+            }
+            lastEnd.x = endX;
+            lastEnd.y = endY;
+            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+            selectedPieceX = selectedPieceY = -1;
+            selectedMoveCount = 0;
+        }
+        // If not a valid move, keep selection/highlight
+    }
+
+    // --- Click-to-select and click-to-move logic ---
+    if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && !isDragging) {
+        // Clicked outside board: deselect
         if (x < 0 || x >= 8 || y < 0 || y >= 8) {
-            // Clicked outside the board: deselect
             if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
             selectedPieceX = selectedPieceY = -1;
             selectedMoveCount = 0;
@@ -835,7 +905,6 @@ void HandlePieceSelection() {
                 if ((int)selectedMoves[i].x == x && (int)selectedMoves[i].y == y) {
                     if (IsValidMove(selectedPieceX, selectedPieceY, x, y)) {
                         char piece = board[selectedPieceY][selectedPieceX];
-                        // Check for promotion
                         if (tolower(piece) == 'p' && ((isupper(piece) && y == 0) || (!isupper(piece) && y == 7))) {
                             promotionPending = true;
                             promotionFromX = selectedPieceX;
@@ -855,6 +924,14 @@ void HandlePieceSelection() {
                         return;
                     }
                 }
+            }
+            // Clicked another of your own pieces: switch selection
+            if (board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
+                if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
+                selectedPieceX = x;
+                selectedPieceY = y;
+                selectedMoves = GeneratePieceMoves(board[y][x], x, y, &selectedMoveCount);
+                return;
             }
             // Clicked elsewhere: deselect
             if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
@@ -877,85 +954,8 @@ void HandlePieceSelection() {
     }
 }
 
-void HandlePieceDragging() {
-    int squareSize = chessBoardSize / 8;
-    if (promotionPending) return; // Block input during promotion
-    // Start dragging
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !isDragging) {
-        Vector2 mousePos = GetMousePosition();
-        int x = (mousePos.x - boardOffsetX) / squareSize;
-        int y = (mousePos.y - boardOffsetY) / squareSize;
-        if (x < 0 || x >= 8 || y < 0 || y >= 8) return; // Bounds check
-        if (board[y][x] != ' ' && ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x])))) {
-            isDragging = true;
-            dragPieceX = x;
-            dragPieceY = y;
-            dragOffset.x = mousePos.x - positions[y][x].x;
-            dragOffset.y = mousePos.y - positions[y][x].y;
-            lastStart.x = x;
-            lastStart.y = y;
-            // --- Also select the piece for persistent highlighting ---
-            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
-            selectedPieceX = x;
-            selectedPieceY = y;
-            selectedMoves = GeneratePieceMoves(board[y][x], x, y, &selectedMoveCount);
-        }
-    }
-
-    // Continue dragging
-    if (isDragging && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
-        Vector2 mousePos = GetMousePosition();
-        positions[dragPieceY][dragPieceX] = (Vector2){ mousePos.x - dragOffset.x, mousePos.y - dragOffset.y };
-    }
-
-    // End dragging
-    if (isDragging && IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
-        isDragging = false;
-        Vector2 mousePos = GetMousePosition();
-        int endX = (mousePos.x - boardOffsetX) / squareSize;
-        int endY = (mousePos.y - boardOffsetY) / squareSize;
-        if (endX < 0 || endX >= 8 || endY < 0 || endY >= 8) {
-            // Revert to original position if out of bounds
-            lastEnd.x = dragPieceX;
-            lastEnd.y = dragPieceY;
-            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
-            selectedPieceX = selectedPieceY = -1;
-            selectedMoveCount = 0;
-            return;
-        }
-        if (IsValidMove(dragPieceX, dragPieceY, endX, endY)) {
-            char piece = board[dragPieceY][dragPieceX];
-            // Check for promotion
-            if (tolower(piece) == 'p' && ((isupper(piece) && endY == 0) || (!isupper(piece) && endY == 7))) {
-                promotionPending = true;
-                promotionFromX = dragPieceX;
-                promotionFromY = dragPieceY;
-                promotionToX = endX;
-                promotionToY = endY;
-                promotionColor = isupper(piece) ? 'w' : 'b';
-                return;
-            } else {
-                ExecuteMove(piece, dragPieceX, dragPieceY, endX, endY, 0);
-            }
-            lastEnd.x = endX;
-            lastEnd.y = endY;
-            // --- After move, deselect ---
-            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
-            selectedPieceX = selectedPieceY = -1;
-            selectedMoveCount = 0;
-        } else {
-            // Revert to original position if the move is not valid
-            lastEnd.x = dragPieceX;
-            lastEnd.y = dragPieceY;
-            if (selectedMoves) { free(selectedMoves); selectedMoves = NULL; }
-            selectedPieceX = selectedPieceY = -1;
-            selectedMoveCount = 0;
-        }
-    }
-}
-
 void Mode() {
-    HandlePieceDragging();
+    HandleInput();
     // For example, handling AI moves if it's the AI's turn
     if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
         (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
@@ -1011,8 +1011,7 @@ int main(void) {
         // Update game logic
         if (!gameOver) {
             if (currentMode != MODE_AI_VS_AI) {
-                HandlePieceSelection(); // <--- NEW: handle selection for persistent highlight
-                HandlePieceDragging();
+                HandleInput(); // <--- Unified input handler
             }
 
             // AI's turn to play in AI vs AI mode, or in single-player modes
