@@ -33,7 +33,7 @@ extern bool  IsKingInCheck(bool isWhite);
 
 // -----------------------------------------------------------------------------
 static int DEPTH_WHITE = 5;
-static int DEPTH_BLACK = 4; // white‑1 by default
+static int DEPTH_BLACK = 5; // white‑1 by default
 static const int INF = 100000000;
 
 // --- Piece values ------------------------------------------------------------

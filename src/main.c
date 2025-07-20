@@ -542,12 +542,24 @@ bool IsValidMove(int startX, int startY, int endX, int endY)
     char p = board[startY][startX];
     if (p == ' ' || (isupper(p) != isWhiteTurn)) return false;
 
-    // play the move directly
+    // 1. Check if the move is legal for the piece
+    int moveCount = 0;
+    Vector2 *moves = GeneratePieceMoves(p, startX, startY, &moveCount);
+    bool found = false;
+    for (int i = 0; i < moveCount; i++) {
+        if ((int)moves[i].x == endX && (int)moves[i].y == endY) {
+            found = true;
+            break;
+        }
+    }
+    free(moves);
+    if (!found) return false;
+
+    // 2. Check king safety
     char savedDst = board[endY][endX];
     board[startY][startX] = ' ';
     board[endY][endX] = p;
     bool ok = !IsKingInCheck(isupper(p)); // king safe?
-    // undo
     board[startY][startX] = p;
     board[endY][endX] = savedDst;
     return ok;
