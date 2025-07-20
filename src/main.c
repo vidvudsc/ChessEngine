@@ -556,12 +556,49 @@ bool IsValidMove(int startX, int startY, int endX, int endY)
     if (!found) return false;
 
     // 2. Check king safety
+    bool ok = true;
+    if (tolower(p) == 'k' && abs(startX - endX) == 2) {
+        // Castling: check all squares king passes through
+        int dir = (endX - startX) > 0 ? 1 : -1;
+        for (int i = 0; i <= 2; ++i) {
+            int kx = startX + i * dir;
+            // Move king to this square
+            char saved = board[startY][kx];
+            board[startY][startX] = ' ';
+            board[startY][kx] = p;
+            if (IsKingInCheck(isupper(p))) ok = false;
+            board[startY][kx] = saved;
+            board[startY][startX] = p;
+            if (!ok) break;
+            // Only check up to the destination square (2 squares away)
+            if (kx == endX) break;
+        }
+    } else if (tolower(p) == 'p' &&
+         endX == enPassantCaptureSquare.x &&
+         endY == enPassantCaptureSquare.y &&
+         abs(startX - endX) == 1 &&
+         ((isupper(p) && startY == 3) || (!isupper(p) && startY == 4)) &&
+         board[endY][endX] == ' ') {
+    // Simulate en passant: move pawn and remove captured pawn
+    int captureRow = isupper(p) ? 3 : 4;
+    char savedDst = board[endY][endX];
+    char savedCap = board[captureRow][endX];
+    board[startY][startX] = ' ';
+    board[endY][endX] = p;
+    board[captureRow][endX] = ' ';
+    ok = !IsKingInCheck(isupper(p));
+    board[startY][startX] = p;
+    board[endY][endX] = savedDst;
+    board[captureRow][endX] = savedCap;
+} else {
+    // Normal move
     char savedDst = board[endY][endX];
     board[startY][startX] = ' ';
     board[endY][endX] = p;
-    bool ok = !IsKingInCheck(isupper(p)); // king safe?
+    ok = !IsKingInCheck(isupper(p)); // king safe?
     board[startY][startX] = p;
     board[endY][endX] = savedDst;
+}
     return ok;
 }
 
@@ -606,6 +643,41 @@ char promotionChosen = 0; // 'Q', 'R', 'B', 'N' (uppercase for white, lowercase 
 
 // Add a flag to suppress double printing for AI
 // bool suppressPrintMove = false;
+
+// --- Castling rights helpers ---------------------------------
+static void revokeByMove(char piece, int sx, int sy)
+{
+    if (tolower(piece)=='k') {
+        if (isupper(piece)) whiteKingMoved  = true;
+        else                 blackKingMoved = true;
+    }
+    else if (tolower(piece)=='r') {
+        if (isupper(piece)) {
+            if (sx==0 && sy==7) whiteRookMoved[0]=true;   // a1 rook moved
+            if (sx==7 && sy==7) whiteRookMoved[1]=true;   // h1 rook moved
+        } else {
+            if (sx==0 && sy==0) blackRookMoved[0]=true;   // a8 rook moved
+            if (sx==7 && sy==0) blackRookMoved[1]=true;   // h8 rook moved
+        }
+    }
+}
+
+static void revokeByCapture(char captured,int x,int y)
+{
+    if (tolower(captured)=='r') {            // a rook was captured
+        if (isupper(captured)) {             // white rook lost
+            if (x==0 && y==7) whiteRookMoved[0]=true;
+            if (x==7 && y==7) whiteRookMoved[1]=true;
+        } else {                             // black rook lost
+            if (x==0 && y==0) blackRookMoved[0]=true;
+            if (x==7 && y==0) blackRookMoved[1]=true;
+        }
+    }
+    else if (tolower(captured)=='k') {       // (rare, but for completeness)
+        if (isupper(captured)) whiteKingMoved  = true;
+        else                   blackKingMoved  = true;
+    }
+}
 
 void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char promotionPiece) {
     // --- Gather pre-move info for PGN ---
@@ -675,6 +747,17 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char pr
         }
     }
 
+    // 1. revoke rights caused by *moving* your own piece
+    revokeByMove(piece, startX, startY);
+
+    // 2. revoke rights caused by *capturing* opponent material
+    if (isEnPassant) {
+        int captureRow = isupper(piece) ? 3 : 4;
+        revokeByCapture(board[captureRow][endX], endX, captureRow);
+    } else if (capturedPiece != ' ') {
+        revokeByCapture(capturedPiece, endX, endY);
+    }
+
     // Execute main move
     board[startY][startX] = ' ';
     board[endY][endX] = piece;
@@ -682,7 +765,7 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char pr
     // Toggle turn
     isWhiteTurn = !isWhiteTurn;
 
-    // Update castling rights etc.
+    // Update castling rights etc. (now a thin wrapper)
     UpdateCastlingRights(piece, startX, startY, endX, endY);
     lastEnd.x = endX; lastEnd.y = endY;
 
@@ -747,22 +830,8 @@ bool IsSeventyFiveMoveRule() {
 
 
 void UpdateCastlingRights(char piece, int startX, int startY, int endX, int endY) {
-    // Update castling rights based on the moved piece
-    if (tolower(piece) == 'k') {
-        if (isupper(piece)) {
-            whiteKingMoved = true;
-        } else {
-            blackKingMoved = true;
-        }
-    } else if (tolower(piece) == 'r') {
-        if (startX == 0 && startY == (isupper(piece) ? 7 : 0)) {
-            if (isupper(piece)) whiteRookMoved[0] = true;
-            else blackRookMoved[0] = true;
-        } else if (startX == 7 && startY == (isupper(piece) ? 7 : 0)) {
-            if (isupper(piece)) whiteRookMoved[1] = true;
-            else blackRookMoved[1] = true;
-        }
-    }
+    // Now just a thin wrapper for revokeByMove
+    revokeByMove(piece, startX, startY);
 }
 
 void HandlePromotionPopup() {
@@ -987,12 +1056,27 @@ long long perft(int depth) {
                     // Save move info for undo
                     char moved = board[y][x];
                     // Promotion handling
-                    char promo = 0;
                     if (tolower(moved) == 'p' && ((isupper(moved) && ty == 0) || (!isupper(moved) && ty == 7))) {
-                        promo = isupper(moved) ? 'Q' : 'q';
+                        char promos[4] = { isupper(moved) ? 'Q' : 'q', isupper(moved) ? 'R' : 'r', isupper(moved) ? 'B' : 'b', isupper(moved) ? 'N' : 'n' };
+                        for (int pi = 0; pi < 4; ++pi) {
+                            ExecuteMove(moved, x, y, tx, ty, promos[pi]);
+                            nodes += perft(depth - 1);
+                            // Undo the move (restore all state)
+                            memcpy(board, boardCopy, sizeof(board));
+                            isWhiteTurn = isWhiteTurnCopy;
+                            whiteKingMoved = whiteKingMovedCopy;
+                            blackKingMoved = blackKingMovedCopy;
+                            whiteRookMoved[0] = whiteRookMovedCopy[0];
+                            whiteRookMoved[1] = whiteRookMovedCopy[1];
+                            blackRookMoved[0] = blackRookMovedCopy[0];
+                            blackRookMoved[1] = blackRookMovedCopy[1];
+                            enPassantCaptureSquare = enPassantCopy;
+                            halfMoveClock = halfMoveClockCopy;
+                        }
+                        continue; // skip the rest of the loop for this move
                     }
                     // Make the move
-                    ExecuteMove(moved, x, y, tx, ty, promo);
+                    ExecuteMove(moved, x, y, tx, ty, 0);
                     // Recurse
                     nodes += perft(depth - 1);
                     // Undo the move (restore all state)
@@ -1012,6 +1096,16 @@ long long perft(int depth) {
         }
     }
     return nodes;
+}
+
+void MoveToUCI(int startX, int startY, int endX, int endY, char promo, char *out) {
+    // promo: 0 if not a promotion, otherwise promotion piece (Q, R, B, N, q, r, b, n)
+    const char files[] = "abcdefgh";
+    sprintf(out, "%c%d%c%d", files[startX], 8 - startY, files[endX], 8 - endY);
+    if (promo) {
+        out[4] = tolower(promo);
+        out[5] = '\0';
+    }
 }
 
 
@@ -1035,11 +1129,12 @@ int main(void) {
     CheckKingsCount();
     // Perft test output
     for (int d = 1; d <= 4; ++d) {
-        clock_t start = clock();
-        long long nodes = perft(d);
-        clock_t end = clock();
-        double ms = 1000.0 * (end - start) / CLOCKS_PER_SEC;
-        printf("Perft(%d): %lld (%.2f ms)\n", d, nodes, ms);
+        printf("Perft(%d):\n", d);
+        double start = GetTime();
+        long long total = perft(d);
+        double elapsed = GetTime() - start;
+        printf("Total: %lld\n", total);
+        printf("Time: %.3f seconds\n", elapsed);
     }
     AI_Init(4);   // depth‑4 search – raise for a stronger engine
     SetTargetFPS(60);
