@@ -77,6 +77,9 @@ bool whiteRookMoved[2] = {false, false}, blackRookMoved[2] = {false, false};
 bool gameOver = false;
 char* gameOverMessage = "";
 
+// --- AI move pending flag for frame-delayed AI move ---
+bool aiMovePending = false;
+
 bool IsKingInCheck(bool isWhiteKing);
 bool IsOpponentPiece(char piece, int x, int y);
 bool IsValidMove(int startX, int startY, int endX, int endY);
@@ -909,6 +912,11 @@ void HandleInput() {
                 return;
             } else {
                 ExecuteMove(piece, dragPieceX, dragPieceY, endX, endY, 0);
+                // --- Set AI move pending if it's now AI's turn ---
+                if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
+                    (currentMode == MODE_PLAY_BLACK && isWhiteTurn)) {
+                    aiMovePending = true;
+                }
             }
             lastEnd.x = endX;
             lastEnd.y = endY;
@@ -952,6 +960,11 @@ void HandleInput() {
                             return;
                         } else {
                             ExecuteMove(piece, selectedPieceX, selectedPieceY, x, y, 0);
+                            // --- Set AI move pending if it's now AI's turn ---
+                            if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
+                                (currentMode == MODE_PLAY_BLACK && isWhiteTurn)) {
+                                aiMovePending = true;
+                            }
                         }
                         lastEnd.x = x;
                         lastEnd.y = y;
@@ -1120,13 +1133,12 @@ int main(void) {
             if (currentMode != MODE_AI_VS_AI) {
                 HandleInput(); // <--- Unified input handler
             }
-
-            // AI's turn to play in AI vs AI mode, or in single-player modes
-            if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
-                (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
-                currentMode == MODE_AI_VS_AI) {
-                AI_PlayMove(isWhiteTurn);
-            }
+            // --- Remove immediate AI move here ---
+            // if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
+            //     (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
+            //     currentMode == MODE_AI_VS_AI) {
+            //     AI_PlayMove(isWhiteTurn);
+            // }
         }
         // Drawing
         BeginDrawing();
@@ -1263,6 +1275,15 @@ int main(void) {
         }
 
         EndDrawing();
+        // --- After drawing, do delayed AI move if pending ---
+        if (!gameOver && aiMovePending) {
+            AI_PlayMove(isWhiteTurn);
+            aiMovePending = false;
+        }
+        // --- AI vs AI mode: still do AI move immediately ---
+        if (!gameOver && currentMode == MODE_AI_VS_AI) {
+            AI_PlayMove(isWhiteTurn);
+        }
     }
     UnloadSound(moveSound);
     UnloadSound(captureSound);
