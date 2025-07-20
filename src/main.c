@@ -7,6 +7,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "ai.h"
+#include "pgn.h"
+#include <stdbool.h>
+
+// --- PGN move tracking globals ---
+#define MAX_MOVES 300
+// Remove PGNMove struct, pgnMoves, pgnMoveCount, PrintMove, PrintFullPGN, MoveToSAN, CopyBoard, and all PGN/move printing logic.
+// Remove any PGN-related button/key logic and references in ExecuteMove and elsewhere.
+
+// Remove the duplicate PGNMove typedef from main.c, and only use the definition from ai.h.
+// typedef struct {
+//     int startX, startY, endX, endY;
+//     char piece; // moved piece
+//     char captured; // captured piece (if any)
+//     char promotion; // promotion piece (if any)
+//     int moveNumber; // 1-based
+//     int isWhite; // 1 if white, 0 if black
+// } PGNMove;
+// PGNMove pgnMoves[MAX_MOVES];
+// int pgnMoveCount = 0;
 
 // --- Add global Sound variables ---
 Sound moveSound; // For normal moves
@@ -578,7 +598,14 @@ bool IsValidMove(int startX, int startY, int endX, int endY) {
     }
 
     // --- En passant legality: temporarily remove captured pawn ---
-    bool isEnPassant = (tolower(tempStart) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1 && tempEnd == ' ');
+    bool isEnPassant = (
+        tolower(tempStart) == 'p' &&
+        endX == enPassantCaptureSquare.x &&
+        endY == enPassantCaptureSquare.y &&
+        abs(startX - endX) == 1 &&
+        ((isupper(tempStart) && startY == 3) || (!isupper(tempStart) && startY == 4)) &&
+        tempEnd == ' '
+    );
     char capturedPawn = 0;
     if (isEnPassant) {
         int captureRow = isupper(tempStart) ? 3 : 4;
@@ -619,144 +646,142 @@ char promotionColor = 0; // 'w' or 'b'
 char promotionChosen = 0; // 'Q', 'R', 'B', 'N' (uppercase for white, lowercase for black)
 
 // Helper to print move in algebraic notation
-void PrintMove(int startX, int startY, int endX, int endY, char movedPiece, char promotionPiece) {
-    char files[] = "abcdefgh";
-    char moveStr[8];
-    if (tolower(movedPiece) == 'p' && ((isupper(movedPiece) && endY == 0) || (!isupper(movedPiece) && endY == 7)) && promotionPiece) {
-        // e7e8q
-        snprintf(moveStr, sizeof(moveStr), "%c%d%c%d%c",
-            files[startX], 8 - startY,
-            files[endX], 8 - endY,
-            tolower(promotionPiece));
-    } else {
-        // e2e4
-        snprintf(moveStr, sizeof(moveStr), "%c%d%c%d",
-            files[startX], 8 - startY,
-            files[endX], 8 - endY);
-    }
-    printf("%s\n", moveStr);
-}
+// void PrintMove(int startX, int startY, int endX, int endY, char movedPiece, char promotionPiece) {
+//     // --- Store move for PGN output ---
+//     // if (pgnMoveCount < MAX_MOVES) {
+//     //     PGNMove *m = &pgnMoves[pgnMoveCount++];
+//     //     m->startX = startX; m->startY = startY; m->endX = endX; m->endY = endY;
+//     //     m->piece = movedPiece;
+//     //     m->promotion = promotionPiece;
+//     //     m->isWhite = isupper(movedPiece);
+//     //     m->moveNumber = (pgnMoveCount+1)/2;
+//     //     m->captured = board[endY][endX];
+//     // }
+//     char files[] = "abcdefgh";
+//     char moveStr[8];
+//     if (tolower(movedPiece) == 'p' && ((isupper(movedPiece) && endY == 0) || (!isupper(movedPiece) && endY == 7)) && promotionPiece) {
+//         // e7e8q
+//         snprintf(moveStr, sizeof(moveStr), "%c%d%c%d%c",
+//             files[startX], 8 - startY,
+//             files[endX], 8 - endY,
+//             tolower(promotionPiece));
+//     } else {
+//         // e2e4
+//         snprintf(moveStr, sizeof(moveStr), "%c%d%c%d",
+//             files[startX], 8 - startY,
+//             files[endX], 8 - endY);
+//     }
+//     printf("%s\n", moveStr);
+//     // --- Store move for PGN output ---
+//     // if (pgnMoveCount < MAX_MOVES) {
+//     //     snprintf(pgnMoves[pgnMoveCount++], 8, "%s", moveStr);
+//     // }
+// }
 
 // Add a flag to suppress double printing for AI
-static bool suppressPrintMove = false;
+// bool suppressPrintMove = false;
 
 void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char promotionPiece) {
-    // Print move for human (AI sets suppressPrintMove)
-    if (!suppressPrintMove) {
-        PrintMove(startX, startY, endX, endY, piece, promotionPiece);
+    // --- Gather pre-move info for PGN ---
+    char capturedPiece = board[endY][endX];
+    bool isCapture = (capturedPiece != ' ');
+    bool isEnPassant = (
+        tolower(piece) == 'p' &&
+        endX == enPassantCaptureSquare.x &&
+        endY == enPassantCaptureSquare.y &&
+        abs(startX - endX) == 1 &&
+        ((isupper(piece) && startY == 3) || (!isupper(piece) && startY == 4)) &&
+        board[endY][endX] == ' '
+    );
+    if (isEnPassant) {
+        int captureRow = isupper(piece) ? 3 : 4;
+        capturedPiece = board[captureRow][endX];
     }
-    // --- Play move/capture sound ---
-    bool isCapture = (board[endY][endX] != ' ');
-    bool isEnPassant = (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1);
-    if (isCapture || isEnPassant) {
-        PlaySound(captureSound);
-    } else {
-        PlaySound(moveSound);
+    bool isCastle = false, isCastleLong = false;
+    if (tolower(piece) == 'k' && abs(startX - endX) == 2) {
+        isCastle = true;
+        isCastleLong = (endX < startX);
     }
-    // Check if the move is a pawn move or a capture
-    if (tolower(piece) == 'p' || board[endY][endX] != ' ') {
-        halfMoveClock = 0;
-    } else {
-        halfMoveClock++;
-    }
-    // Perform en passant capture
-    if (tolower(piece) == 'p' && endX == enPassantCaptureSquare.x && abs(startY - endY) == 1) {
-        int captureRow = isupper(piece) ? 3 : 4; // Opponent's pawn row
+
+    // Record BEFORE changing the board (for disambiguation logic)
+    PGN_RecordMoveBefore(startX,startY,endX,endY,piece,capturedPiece,promotionPiece,
+                         isCapture || isEnPassant,isCastle,isCastleLong,isEnPassant);
+
+    // --- Sounds (unchanged except we reuse isCapture/isEnPassant) ---
+    if (isCapture || isEnPassant) PlaySound(captureSound);
+    else PlaySound(moveSound);
+
+    // Half-move clock update
+    if (tolower(piece) == 'p' || isCapture || isEnPassant) halfMoveClock = 0;
+    else halfMoveClock++;
+
+    // Perform en passant capture on board
+    if (isEnPassant) {
+        int captureRow = isupper(piece) ? 3 : 4;
         board[captureRow][endX] = ' ';
-        halfMoveClock = 0; // Reset for en passant
+        halfMoveClock = 0;
     }
-    // Set or reset en passant capture square for pawn moves
-    if (tolower(piece) == 'p' && abs(startY - endY) == 2) { // Two-square move
+
+    // Set/reset en passant square
+    if (tolower(piece) == 'p' && abs(startY - endY) == 2) {
         enPassantCaptureSquare = (Vector2){endX, startY + (isupper(piece) ? -1 : 1)};
     } else {
         enPassantCaptureSquare = (Vector2){-1, -1};
     }
 
-    // Pawn promotion logic
+    // Promotion
     if (tolower(piece) == 'p') {
         if ((isupper(piece) && endY == 0) || (!isupper(piece) && endY == 7)) {
-            if (promotionPiece) {
-                piece = promotionPiece;
-            } else {
-                piece = isupper(piece) ? 'Q' : 'q';
-            }
-            halfMoveClock = 0; // Reset for promotion
+            if (promotionPiece) piece = promotionPiece;
+            else piece = isupper(piece) ? 'Q' : 'q';
+            halfMoveClock = 0;
         }
     }
 
-    // --- Castling rook movement ---
+    // Castling rook move
     if (tolower(piece) == 'k' && abs(startX - endX) == 2) {
-        if (isupper(piece)) { // White
-            if (endX == 6) { // Kingside
-                board[7][5] = 'R';
-                board[7][7] = ' ';
-                whiteRookMoved[1] = true;
-            } else if (endX == 2) { // Queenside
-                board[7][3] = 'R';
-                board[7][0] = ' ';
-                whiteRookMoved[0] = true;
-            }
-        } else { // Black
-            if (endX == 6) { // Kingside
-                board[0][5] = 'r';
-                board[0][7] = ' ';
-                blackRookMoved[1] = true;
-            } else if (endX == 2) { // Queenside
-                board[0][3] = 'r';
-                board[0][0] = ' ';
-                blackRookMoved[0] = true;
-            }
+        if (isupper(piece)) {
+            if (endX == 6) { board[7][5] = 'R'; board[7][7] = ' '; whiteRookMoved[1] = true; }
+            else { board[7][3] = 'R'; board[7][0] = ' '; whiteRookMoved[0] = true; }
+        } else {
+            if (endX == 6) { board[0][5] = 'r'; board[0][7] = ' '; blackRookMoved[1] = true; }
+            else { board[0][3] = 'r'; board[0][0] = ' '; blackRookMoved[0] = true; }
         }
     }
 
-    // Execute the move
+    // Execute main move
     board[startY][startX] = ' ';
     board[endY][endX] = piece;
-    
-    // Update the game state (turn, castling rights, etc.)
-    isWhiteTurn = !isWhiteTurn;
-    UpdateCastlingRights(piece, startX, startY, endX, endY);
-    lastEnd.x = endX;
-    lastEnd.y = endY;
-}
 
-// Add PerformAIMove definition above ExecuteMove
-void PerformAIMove(bool isWhite) {
-    // Build a list of all legal moves with full info
-    Move *legalMoves = NULL;
-    int legalMoveCount = 0;
-    for (int y = 0; y < 8; y++) {
-        for (int x = 0; x < 8; x++) {
-            if ((isWhite && isupper(board[y][x])) || (!isWhite && islower(board[y][x]))) {
-                int moveCount;
-                Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &moveCount);
-                for (int j = 0; j < moveCount; j++) {
-                    int ex = (int)pieceMoves[j].x, ey = (int)pieceMoves[j].y;
-                    if (IsValidMove(x, y, ex, ey)) {
-                        legalMoves = realloc(legalMoves, (legalMoveCount + 1) * sizeof(Move));
-                        legalMoves[legalMoveCount++] = (Move){x, y, ex, ey};
+    // Toggle turn
+    isWhiteTurn = !isWhiteTurn;
+
+    // Update castling rights etc.
+    UpdateCastlingRights(piece, startX, startY, endX, endY);
+    lastEnd.x = endX; lastEnd.y = endY;
+
+    // --- Determine check / mate for SAN suffix ---
+    bool opponentIsWhite = isWhiteTurn; // after toggle
+    bool opponentInCheck = IsKingInCheck(opponentIsWhite);
+    bool opponentHasLegal = false;
+    if (opponentInCheck) {
+        // test for any legal escape
+        for (int y=0; y<8 && !opponentHasLegal; y++) {
+            for (int x=0; x<8 && !opponentHasLegal; x++) {
+                if ((opponentIsWhite && isupper(board[y][x])) || (!opponentIsWhite && islower(board[y][x]))) {
+                    int mc; Vector2 *pm = GeneratePieceMoves(board[y][x], x, y, &mc);
+                    for (int i=0;i<mc && !opponentHasLegal;i++) {
+                        int tx = (int)pm[i].x, ty=(int)pm[i].y;
+                        if (IsValidMove(x,y,tx,ty)) opponentHasLegal = true;
                     }
+                    free(pm);
                 }
-                free(pieceMoves);
             }
         }
     }
-    if (legalMoveCount > 0) {
-        int randomIndex = rand() % legalMoveCount;
-        Move selected = legalMoves[randomIndex];
-        char movedPiece = board[selected.startY][selected.startX];
-        char promo = 0;
-        if (tolower(movedPiece) == 'p' && ((isupper(movedPiece) && selected.endY == 0) || (!isupper(movedPiece) && selected.endY == 7))) {
-            promo = isupper(movedPiece) ? 'Q' : 'q';
-        }
-        PrintMove(selected.startX, selected.startY, selected.endX, selected.endY, movedPiece, promo);
-        suppressPrintMove = true;
-        ExecuteMove(movedPiece, selected.startX, selected.startY, selected.endX, selected.endY, promo);
-        suppressPrintMove = false;
-    }
-    free(legalMoves);
-    CheckKingsCount();
+    PGN_FinalizeLastMove(opponentInCheck, (opponentInCheck && !opponentHasLegal));
 }
+
 
 bool IsInsufficientMaterial() {
     int knights[2] = {0, 0}, bishops[2] = {0, 0};
@@ -972,7 +997,7 @@ void Mode() {
     if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
         (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
         currentMode == MODE_AI_VS_AI) {
-        PerformAIMove(isWhiteTurn);
+        AI_PlayMove(isWhiteTurn);
     }
 }
 
@@ -991,6 +1016,66 @@ void PrintGameMode(void) {
 }
 
 
+
+// Helper: convert move to SAN
+// Helper: copy board
+// Print full PGN with headers and SAN moves
+// Print full PGN with headers and SAN moves
+
+// Perft (move counting) function for debugging
+long long perft(int depth) {
+    if (depth == 0) return 1;
+    long long nodes = 0;
+    int moveCount;
+    // Save board state for undo
+    char boardCopy[8][8];
+    memcpy(boardCopy, board, sizeof(board));
+    bool isWhiteTurnCopy = isWhiteTurn;
+    bool whiteKingMovedCopy = whiteKingMoved, blackKingMovedCopy = blackKingMoved;
+    bool whiteRookMovedCopy[2] = {whiteRookMoved[0], whiteRookMoved[1]};
+    bool blackRookMovedCopy[2] = {blackRookMoved[0], blackRookMoved[1]};
+    Vector2 enPassantCopy = enPassantCaptureSquare;
+    int halfMoveClockCopy = halfMoveClock;
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            char piece = board[y][x];
+            if (piece == ' ') continue;
+            if ((isWhiteTurn && isupper(piece)) || (!isWhiteTurn && islower(piece))) {
+                Vector2 *moves = GeneratePieceMoves(piece, x, y, &moveCount);
+                for (int i = 0; i < moveCount; i++) {
+                    int tx = (int)moves[i].x, ty = (int)moves[i].y;
+                    if (!IsValidMove(x, y, tx, ty)) continue;
+                    // Save move info for undo
+                    char moved = board[y][x];
+                    // Promotion handling
+                    char promo = 0;
+                    if (tolower(moved) == 'p' && ((isupper(moved) && ty == 0) || (!isupper(moved) && ty == 7))) {
+                        promo = isupper(moved) ? 'Q' : 'q';
+                    }
+                    // Make the move
+                    ExecuteMove(moved, x, y, tx, ty, promo);
+                    // Recurse
+                    nodes += perft(depth - 1);
+                    // Undo the move (restore all state)
+                    memcpy(board, boardCopy, sizeof(board));
+                    isWhiteTurn = isWhiteTurnCopy;
+                    whiteKingMoved = whiteKingMovedCopy;
+                    blackKingMoved = blackKingMovedCopy;
+                    whiteRookMoved[0] = whiteRookMovedCopy[0];
+                    whiteRookMoved[1] = whiteRookMovedCopy[1];
+                    blackRookMoved[0] = blackRookMovedCopy[0];
+                    blackRookMoved[1] = blackRookMovedCopy[1];
+                    enPassantCaptureSquare = enPassantCopy;
+                    halfMoveClock = halfMoveClockCopy;
+                }
+                free(moves);
+            }
+        }
+    }
+    return nodes;
+}
+
+
 int main(void) {
     InitWindow(screenWidth, screenHeight, "Chess Engine");
     InitAudioDevice(); // Initialize audio device
@@ -1006,8 +1091,15 @@ int main(void) {
     UnloadImage(chessImage);
     LoadChessPieces();
     SetupBoardFromFEN(fenString);
+    PGN_Reset();
     PrintBoard(); // Debug: print board after FEN setup
     CheckKingsCount();
+    // Perft test output
+    printf("Perft(1): %lld\n", perft(1));
+    printf("Perft(2): %lld\n", perft(2));
+    printf("Perft(3): %lld\n", perft(3));
+    printf("Perft(4): %lld\n", perft(4));
+    AI_Init(4);   // depth‑4 search – raise for a stronger engine
     SetTargetFPS(60);
     srand(time(NULL));
     // ToggleFullscreen();
@@ -1033,7 +1125,7 @@ int main(void) {
             if ((currentMode == MODE_PLAY_WHITE && !isWhiteTurn) ||
                 (currentMode == MODE_PLAY_BLACK && isWhiteTurn) ||
                 currentMode == MODE_AI_VS_AI) {
-                PerformAIMove(isWhiteTurn);
+                AI_PlayMove(isWhiteTurn);
             }
         }
         // Drawing
@@ -1053,6 +1145,7 @@ int main(void) {
             if (currentMode != MODE_NORMAL) {
                 currentMode = MODE_NORMAL;
                 SetupBoardFromFEN(fenString);
+                PGN_Reset();
                 isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
                 PrintGameMode();
             }
@@ -1063,6 +1156,7 @@ int main(void) {
             if (currentMode != MODE_PLAY_WHITE) {
                 currentMode = MODE_PLAY_WHITE;
                 SetupBoardFromFEN(fenString);
+                PGN_Reset();
                 isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
                 PrintGameMode();
             }
@@ -1073,6 +1167,7 @@ int main(void) {
             if (currentMode != MODE_PLAY_BLACK) {
                 currentMode = MODE_PLAY_BLACK;
                 SetupBoardFromFEN(fenString);
+                PGN_Reset();
                 isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
                 PrintGameMode();
             }
@@ -1083,6 +1178,7 @@ int main(void) {
             if (currentMode != MODE_AI_VS_AI) {
                 currentMode = MODE_AI_VS_AI;
                 SetupBoardFromFEN(fenString);
+                PGN_Reset();
                 isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
                 PrintGameMode();
             }
@@ -1091,6 +1187,7 @@ int main(void) {
         // Restart button
         if (GuiButton((Rectangle){10, screenHeight - 160, buttonWidth, buttonHeight}, "Restart")) {
             SetupBoardFromFEN(fenString);
+            PGN_Reset();
             halfMoveClock = 0;
             isWhiteTurn = true;
             whiteKingMoved = blackKingMoved = false;
@@ -1100,6 +1197,8 @@ int main(void) {
             gameOver = false;
             isDragging = false; dragPieceX = dragPieceY = -1; // Reset drag state
             PrintGameMode();
+            // --- Reset PGN move list ---
+            // pgnMoveCount = 0; // Removed
         }
 
         // Quit button
@@ -1107,6 +1206,15 @@ int main(void) {
             CloseWindow();
             return 0;
         }
+
+        // Print PGN button
+        if (GuiButton((Rectangle){10, screenHeight - 220, buttonWidth, buttonHeight}, "Print PGN")) {
+            PGN_PrintGame();
+        }
+        // Print PGN on G key
+        // if (IsKeyPressed(KEY_G)) { // Removed
+        //     PrintFullPGN(); // Removed
+        // }
 
 
         // --- LEGAL MOVE COUNTING FOR GAME OVER ---
@@ -1131,28 +1239,26 @@ int main(void) {
             bool blackKingInCheck = IsKingInCheck(false);
             if ((isWhiteTurn && whiteKingInCheck) || (!isWhiteTurn && blackKingInCheck)) {
                 gameOverMessage = isWhiteTurn ? "Black wins by checkmate!" : "White wins by checkmate!";
+                PGN_SetResult(isWhiteTurn ? "0-1" : "1-0");
             } else {
                 gameOverMessage = "Stalemate!"; // Stalemate condition
+                PGN_SetResult("1/2-1/2");
             }
         } else if (IsFiftyMoveRule() || IsSeventyFiveMoveRule()) {
             gameOver = true;
             gameOverMessage = "Draw by move rule!";
+            PGN_SetResult("1/2-1/2");
         } else if (IsInsufficientMaterial()) {
             gameOver = true;
             gameOverMessage = "Draw by insufficient material!";
+            PGN_SetResult("1/2-1/2");
         }
-
-
+        // Always display game over message regardless of mode
         if (gameOver) {
-            // Display game over message
-
             int textWidth = MeasureText(gameOverMessage, 20);
-            int textHeight = 20; // Assuming a font size of 20
-            // Calculate the position for the bottom right corner
-            int posX = GetScreenWidth() - textWidth - 10; // 10 pixels from the right edge
-            int posY = GetScreenHeight() - textHeight - 10; // 10 pixels from the bottom edge
-
-            // Draw the text at the calculated position
+            int textHeight = 20;
+            int posX = GetScreenWidth() - textWidth - 10;
+            int posY = GetScreenHeight() - textHeight - 10;
             DrawText(gameOverMessage, posX, posY, 20, RED);
         }
 
