@@ -80,6 +80,9 @@ char* gameOverMessage = "";
 // --- AI move pending flag for frame-delayed AI move ---
 bool aiMovePending = false;
 
+// --- Legal move recompute flag ---
+bool needRecomputeLegal = true;
+
 bool IsKingInCheck(bool isWhiteKing);
 bool IsOpponentPiece(char piece, int x, int y);
 bool IsValidMove(int startX, int startY, int endX, int endY);
@@ -531,115 +534,23 @@ Vector2 *GenerateMoves(bool isWhite, int *totalMoveCount) {
     return allMoves;
 }
 
-bool IsValidMove(int startX, int startY, int endX, int endY) {
-    // Validate the basic movement rules
-    int moveCount;
-    Vector2 *moves = GeneratePieceMoves(board[startY][startX], startX, startY, &moveCount);
+bool IsValidMove(int startX, int startY, int endX, int endY)
+{
+    // quick rejects – own piece, out‑of‑bounds, etc.
+    if (startX < 0 || startX >= 8 || startY < 0 || startY >= 8 || endX < 0 || endX >= 8 || endY < 0 || endY >= 8)
+        return false;
+    char p = board[startY][startX];
+    if (p == ' ' || (isupper(p) != isWhiteTurn)) return false;
 
-    bool validBasicMove = false;
-    for (int i = 0; i < moveCount; i++) {
-        if (moves[i].x == endX && moves[i].y == endY) {
-            validBasicMove = true;
-            break;
-        }
-    }
-    free(moves);
-
-    if (!validBasicMove) {
-        return false; // The move is not valid according to basic chess rules
-    }
-
-    char tempStart = board[startY][startX];
-    char tempEnd = board[endY][endX];
-    bool isWhiteMove = isupper(tempStart);
-
-    // --- Castling path check: clear destination square if occupied by opponent ---
-    if (tolower(tempStart) == 'k' && abs(startX - endX) == 2) {
-        int castleY = isWhiteMove ? 7 : 0;
-        int direction = (endX > startX) ? 1 : -1;
-        bool previouslyMoved = isWhiteMove ? whiteKingMoved : blackKingMoved; // store original state
-        char savedSquares[3] = {' ', ' ', ' '};
-        int idx = 0;
-        for (int x = startX + direction; x != endX + direction; x += direction) {
-            char orig = board[castleY][x];
-            if ((orig != ' ' && x != endX) || IsKingInCheck(isWhiteMove)) {
-                return false; // The king is moving through or into check
-            }
-            // Temporarily move the king for check detection
-            board[castleY][startX] = ' ';
-            if (x == endX) {
-                savedSquares[idx] = board[castleY][x];
-                board[castleY][x] = tempStart;
-            }
-            if (isWhiteMove) {
-                whiteKingMoved = true;
-            } else {
-                blackKingMoved = true;
-            }
-            if (IsKingInCheck(isWhiteMove)) {
-                // Undo the king move and reset moved state
-                board[castleY][startX] = tempStart;
-                if (x == endX) board[castleY][x] = savedSquares[idx];
-                if (isWhiteMove) {
-                    whiteKingMoved = previouslyMoved;
-                } else {
-                    blackKingMoved = previouslyMoved;
-                }
-                return false;
-            }
-            // Undo the king move
-            board[castleY][startX] = tempStart;
-            if (x == endX) board[castleY][x] = savedSquares[idx];
-            idx++;
-        }
-        // reset king move state before returning true
-        if (isWhiteMove) {
-            whiteKingMoved = previouslyMoved;
-        } else {
-            blackKingMoved = previouslyMoved;
-        }
-    }
-
-    // --- En passant legality: temporarily remove captured pawn ---
-    bool isEnPassant = (
-        tolower(tempStart) == 'p' &&
-        endX == enPassantCaptureSquare.x &&
-        endY == enPassantCaptureSquare.y &&
-        abs(startX - endX) == 1 &&
-        ((isupper(tempStart) && startY == 3) || (!isupper(tempStart) && startY == 4)) &&
-        tempEnd == ' '
-    );
-    char capturedPawn = 0;
-    if (isEnPassant) {
-        int captureRow = isupper(tempStart) ? 3 : 4;
-        capturedPawn = board[captureRow][endX];
-        board[startY][startX] = ' ';
-        board[captureRow][endX] = ' ';
-        board[endY][endX] = tempStart;
-    } else {
-        // Make the move temporarily
-        board[startY][startX] = ' ';
-        board[endY][endX] = tempStart;
-    }
-
-    bool isPlayerKingInCheck = IsKingInCheck(isWhiteMove);  // Check if player's own king is in check
-
-    // Revert the move
-    if (isEnPassant) {
-        board[startY][startX] = tempStart;
-        board[endY][endX] = tempEnd;
-        int captureRow = isupper(tempStart) ? 3 : 4;
-        board[captureRow][endX] = capturedPawn;
-    } else {
-        board[startY][startX] = tempStart;
-        board[endY][endX] = tempEnd;
-    }
-
-    if (isPlayerKingInCheck) {
-        return false; // The move leaves player's own king in check
-    }
-
-    return true; // The move is valid
+    // play the move directly
+    char savedDst = board[endY][endX];
+    board[startY][startX] = ' ';
+    board[endY][endX] = p;
+    bool ok = !IsKingInCheck(isupper(p)); // king safe?
+    // undo
+    board[startY][startX] = p;
+    board[endY][endX] = savedDst;
+    return ok;
 }
 
 // --- Promotion state ---
@@ -762,6 +673,9 @@ void ExecuteMove(char piece, int startX, int startY, int endX, int endY, char pr
     // Update castling rights etc.
     UpdateCastlingRights(piece, startX, startY, endX, endY);
     lastEnd.x = endX; lastEnd.y = endY;
+
+    // --- Set legal move recompute flag ---
+    needRecomputeLegal = true;
 
     // --- Determine check / mate for SAN suffix ---
     bool opponentIsWhite = isWhiteTurn; // after toggle
@@ -1108,10 +1022,13 @@ int main(void) {
     PrintBoard(); // Debug: print board after FEN setup
     CheckKingsCount();
     // Perft test output
-    printf("Perft(1): %lld\n", perft(1));
-    printf("Perft(2): %lld\n", perft(2));
-    printf("Perft(3): %lld\n", perft(3));
-    printf("Perft(4): %lld\n", perft(4));
+    for (int d = 1; d <= 4; ++d) {
+        clock_t start = clock();
+        long long nodes = perft(d);
+        clock_t end = clock();
+        double ms = 1000.0 * (end - start) / CLOCKS_PER_SEC;
+        printf("Perft(%d): %lld (%.2f ms)\n", d, nodes, ms);
+    }
     AI_Init(4);   // depth‑4 search – raise for a stronger engine
     SetTargetFPS(60);
     srand(time(NULL));
@@ -1229,21 +1146,25 @@ int main(void) {
         // }
 
 
-        // --- LEGAL MOVE COUNTING FOR GAME OVER ---
-        int totalMoveCount = 0;
-        for (int y = 0; y < 8; y++) {
-            for (int x = 0; x < 8; x++) {
-                if ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x]))) {
-                    int moveCount;
-                    Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &moveCount);
-                    for (int i = 0; i < moveCount; i++) {
-                        if (IsValidMove(x, y, (int)pieceMoves[i].x, (int)pieceMoves[i].y)) {
-                            totalMoveCount++;
+        // --- LEGAL MOVE COUNTING FOR GAME OVER (only if needed) ---
+        static int totalMoveCount = 0;
+        if (needRecomputeLegal) {
+            totalMoveCount = 0;
+            for (int y = 0; y < 8; y++) {
+                for (int x = 0; x < 8; x++) {
+                    if ((isWhiteTurn && isupper(board[y][x])) || (!isWhiteTurn && islower(board[y][x]))) {
+                        int moveCount;
+                        Vector2 *pieceMoves = GeneratePieceMoves(board[y][x], x, y, &moveCount);
+                        for (int i = 0; i < moveCount; i++) {
+                            if (IsValidMove(x, y, (int)pieceMoves[i].x, (int)pieceMoves[i].y)) {
+                                totalMoveCount++;
+                            }
                         }
+                        free(pieceMoves);
                     }
-                    free(pieceMoves);
                 }
             }
+            needRecomputeLegal = false;
         }
         if (totalMoveCount == 0) {
             gameOver = true;
